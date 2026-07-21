@@ -124,6 +124,99 @@ conftest test .\policy-input.json `
   --namespace ghostbusters
 ```
 
+## External-call retries, timeouts, and safe failure
+
+The Investigator executes each read-only evidence provider through the centralized retry wrapper in `core/retry.py`. A retry gives a temporary failure another bounded attempt. Exponential backoff increases the delay between attempts so a struggling provider is not called continuously:
+
+```text
+delay = min(initial_delay * multiplier ** retry_number + jitter, maximum_delay)
+```
+
+Retries are safe only for idempotent operations. Current evidence reads and Redis `GET`/`SET` operations are treated as idempotent. A future write such as GitHub pull-request creation must explicitly opt out unless it has its own idempotency key.
+
+### Default retry configuration
+
+```dotenv
+EXTERNAL_RETRY_ENABLED=true
+EXTERNAL_RETRY_MAX_ATTEMPTS=3
+EXTERNAL_RETRY_INITIAL_DELAY_SECONDS=0.25
+EXTERNAL_RETRY_MULTIPLIER=2
+EXTERNAL_RETRY_MAX_DELAY_SECONDS=2
+EXTERNAL_RETRY_JITTER_SECONDS=0.10
+EXTERNAL_CALL_TIMEOUT_SECONDS=5
+```
+
+For deterministic debugging, disable retries while retaining one safe attempt:
+
+```dotenv
+EXTERNAL_RETRY_ENABLED=false
+```
+
+Set jitter to zero for predictable retry timing:
+
+```dotenv
+EXTERNAL_RETRY_JITTER_SECONDS=0
+```
+
+### Retried failures
+
+- HTTP 408 and timeouts
+- HTTP 429 rate limits
+- HTTP 500, 502, 503, and 504
+- Connection failures
+- Temporary DNS/network failures
+- Provider-specific errors explicitly classified as temporary
+
+For HTTP 429, `Retry-After` is used when available and capped by `EXTERNAL_RETRY_MAX_DELAY_SECONDS`. Otherwise, exponential delay is used. Retries stop after the configured maximum attempt count.
+
+### Failures that are not retried
+
+- HTTP 400 invalid requests
+- HTTP 401 authentication failures
+- HTTP 403 authorization failures
+- Genuine HTTP 404 resource absence
+- Invalid provider configuration or credentials
+- Invalid evidence response schemas
+- Terraform validation failures
+- Policy denials
+- Local deterministic calculation or validation errors
+
+Authentication and authorization failures are recorded as unavailable evidence with a safe category, but tokens, headers, raw request bodies, and raw exception text are not exposed.
+
+### Timeout behavior
+
+Real adapters must apply `EXTERNAL_CALL_TIMEOUT_SECONDS` in their HTTP or SDK client. The central wrapper classifies provider timeout exceptions as temporary and also rejects a synchronous result that returns after the configured deadline. This prototype does not create background worker threads to interrupt synchronous mock functions, avoiding abandoned thread work.
+
+### Unavailable evidence
+
+If all attempts fail, the provider produces an explicit evidence item with:
+
+- `freshness_status: unavailable`
+- No fabricated value
+- Safe failure category
+- Attempt count
+- Retryable/exhausted status
+- Sanitized final failure type
+
+The existing missing-evidence, alternative-generation, verifier, policy, and confidence logic then lowers confidence and selects `request_evidence`, `abstain`, `keep`, or `blocked`. Missing utilization prevents precise rightsizing, and missing pricing prevents exact savings claims. When Jira is unavailable and Git activity is available, Git is recorded as alternative context without pretending it is Jira data.
+
+### Retry audit events
+
+Workflow audit history records these events in attempt order:
+
+```text
+external_call_started
+external_call_failed
+external_call_retry_scheduled
+external_call_succeeded
+external_call_exhausted
+alternative_evidence_selected
+```
+
+Audit metadata is limited to the tool, attempt number, maximum attempts, safe failure category, retry delay, elapsed time, and run ID. Secrets and raw exception messages are excluded.
+
+All current pricing, utilization, Jira, Git activity, and dependency providers remain mocked fixtures. Redis retry behavior is unit-tested, but a live Redis service has not been tested on this machine.
+
 ## Persistence
 
 When `DATABASE_URL` is set, workflow snapshots, evidence records, approvals, waivers, and audit events are stored in PostgreSQL. When it is absent, tests and lightweight development can use the in-memory store. Redis provides short-lived GitHub delivery lookup; PostgreSQL idempotency is the durable fallback.

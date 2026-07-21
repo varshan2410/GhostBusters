@@ -29,7 +29,7 @@ The current repository is a working backend prototype for the NeuroX 1.0 Phase 2
 | Real LLM reasoning | Not implemented | Planning and reasoning are currently deterministic Python logic. |
 | LangGraph | Not implemented | The workflow is coordinated by `WorkflowService`. |
 | OPA/Conftest | Implemented | Rego runs through Conftest when available, with fail-safe Python fallback. |
-| Retry/backoff | Not implemented | External-call retry handling remains future work. |
+| Retry/backoff | Implemented | External evidence calls use bounded retry, timeout classification, exponential backoff, and safe unavailable evidence. |
 | Approval tokens and waiver behavior | Not implemented | The waiver table exists, but workflow enforcement does not. |
 | Post-deployment savings check | Not implemented | Predicted-versus-actual savings are not yet recorded. |
 
@@ -316,14 +316,13 @@ Invoke-RestMethod `
 
 The recommended remaining work is:
 
-1. Add retry and exponential backoff for external calls.
-2. Add signed, expiring, user-specific approval tokens and complete waiver behavior.
-3. Add predicted-versus-actual post-deployment savings tracking.
-4. Replace the placeholder page with a working API-driven UI.
-5. Add real GitHub webhook validation and pull-request creation.
-6. Add one real LLM Investigator call with explainable structured output.
-7. Add a minimal LangGraph state graph with conditional routing.
-8. Prepare the final live demonstration guide.
+1. Add signed, expiring, user-specific approval tokens and complete waiver behavior.
+2. Add predicted-versus-actual post-deployment savings tracking.
+3. Replace the placeholder page with a working API-driven UI.
+4. Add real GitHub webhook validation and pull-request creation.
+5. Add one real LLM Investigator call with explainable structured output.
+6. Add a minimal LangGraph state graph with conditional routing.
+7. Prepare the final live demonstration guide.
 
 ## 10. Important Demo Limitations
 

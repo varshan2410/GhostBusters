@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+import app.main as main_module
 from app.main import app
+from core.webhook_dedup import NoopWebhookDeduplicator
 
 
 client = TestClient(app)
 
 
 def setup_function() -> None:
+    # API unit tests must not depend on a live Redis service.
+    main_module.webhook_deduplicator = NoopWebhookDeduplicator()
     client.post("/api/reset")
 
 

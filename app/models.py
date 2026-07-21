@@ -12,6 +12,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 FreshnessStatus = Literal["fresh", "stale", "unavailable", "unknown"]
 ToolExecutionStatus = Literal["pending", "running", "completed", "failed", "skipped"]
+ExternalCallEventType = Literal[
+    "external_call_started",
+    "external_call_succeeded",
+    "external_call_retry_scheduled",
+    "external_call_failed",
+    "external_call_exhausted",
+    "alternative_evidence_selected",
+]
 QuestionStatus = Literal["unresolved", "resolved", "failed", "skipped"]
 ConflictSeverity = Literal["low", "medium", "high"]
 AlternativeAction = Literal["keep", "downsize", "schedule", "request_evidence", "abstain", "blocked"]
@@ -73,6 +81,30 @@ class EvidenceItem(AppModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExternalCallEvent(AppModel):
+    event_type: ExternalCallEventType
+    attempt: int
+    maximum_attempts: int
+    failure_category: str | None = None
+    retryable: bool | None = None
+    retry_delay_seconds: float | None = None
+    elapsed_ms: int = 0
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExternalCallExecutionResult(AppModel):
+    tool_name: str
+    success: bool
+    attempts: int
+    retry_exhausted: bool
+    failure_category: str | None = None
+    retryable: bool | None = None
+    final_failure_type: str | None = None
+    elapsed_ms: int = 0
+    safe_message: str
+    events: list[ExternalCallEvent] = Field(default_factory=list)
+
+
 class ToolExecutionRecord(AppModel):
     tool_name: str
     selected_because: str
@@ -82,6 +114,7 @@ class ToolExecutionRecord(AppModel):
     input_summary: str | None = None
     output_summary: str | None = None
     error: str | None = None
+    external_call: ExternalCallExecutionResult | None = None
 
 
 class ResourceEvidence(AppModel):

@@ -3,7 +3,9 @@ from __future__ import annotations
 from uuid import uuid4
 
 from redis.exceptions import RedisError
+from redis.exceptions import ConnectionError as RedisConnectionError
 
+from core.retry import RetryConfig, RetryExecutor
 from core.webhook_dedup import NoopWebhookDeduplicator, RedisWebhookDeduplicator
 
 
@@ -59,3 +61,34 @@ def test_noop_deduplicator_is_safe_without_redis_configuration() -> None:
 
     assert deduplicator.get_run_id("delivery-3") is None
     deduplicator.remember("delivery-3", uuid4())
+
+
+def test_redis_temporary_failure_is_retried_without_real_sleep() -> None:
+    class FlakyRedis(FakeRedis):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def get(self, key: str) -> str | None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RedisConnectionError("temporary")
+            return super().get(key)
+
+    client = FlakyRedis()
+    run_id = uuid4()
+    client.values["ghostbusters:webhook:delivery-4"] = str(run_id)
+    deduplicator = deduplicator_with(client)
+    deduplicator.retry_executor = RetryExecutor(
+        RetryConfig(
+            max_attempts=2,
+            initial_delay_seconds=0,
+            max_delay_seconds=0,
+            jitter_seconds=0,
+        ),
+        sleep=lambda delay: None,
+        retryable_exceptions=(RedisConnectionError,),
+    )
+
+    assert deduplicator.get_run_id("delivery-4") == run_id
+    assert client.calls == 2

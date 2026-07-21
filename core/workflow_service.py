@@ -40,6 +40,7 @@ from core.investigator import CRITICAL_SOURCES, collect_evidence
 from core.mock_pr import create_mock_pull_request
 from core.policy_engine import evaluate_policy
 from core.reasoning_engine import _final_status, _select_preferred, analyze_resource
+from core.retry import RetryExecutor, default_retry_executor
 from core.run_store import DuplicateIdempotencyKeyError, RunNotFoundError, RunStore
 from core.storage_factory import build_run_store
 from core.verifier import run_verifier
@@ -91,10 +92,12 @@ class WorkflowService:
         store: RunStore | None = None,
         tool_registry: ToolRegistry | None = None,
         policy_evaluator: ConftestPolicyEvaluator | None = None,
+        retry_executor: RetryExecutor | None = None,
     ) -> None:
         self.store = store or build_run_store()
         self.tool_registry = tool_registry or default_registry
         self.policy_evaluator = policy_evaluator or default_policy_evaluator
+        self.retry_executor = retry_executor or default_retry_executor
 
     def start_run(self, request: StartRunRequest) -> tuple[WorkflowRun, bool]:
         if request.idempotency_key:
@@ -137,6 +140,7 @@ class WorkflowService:
                     self.tool_registry,
                     self.policy_evaluator,
                     current.id,
+                    self.retry_executor,
                 )
                 if request.human_context:
                     decision = self._add_context_to_decision(
@@ -238,9 +242,15 @@ class WorkflowService:
             selected_tools=list(request.requested_sources),
             planning_notes=[f"Selected {source}: requested by human reviewer." for source in request.requested_sources],
         )
-        evidence, records, _ = collect_evidence(plan, scenario, resource, self.tool_registry)
+        evidence, records, _ = collect_evidence(
+            plan,
+            scenario,
+            resource,
+            self.tool_registry,
+            self.retry_executor,
+        )
         for record_item in records:
-            append_audit_event(run, event_type=f"tool_{record_item.status}", actor="tool", summary=f"{record_item.tool_name} {record_item.status}", details=record_item.model_dump(mode="json"))
+            self._append_tool_execution_audit(run, record_item)
         merged_evidence = [item for item in decision.evidence if item.source not in set(request.requested_sources)] + evidence
         run.decision_record = self._recalculate_decision(
             decision,
@@ -434,13 +444,66 @@ class WorkflowService:
         for tool in decision.investigation_plan.selected_tools:
             append_audit_event(run, event_type="tool_selected", actor="agent", summary=f"Selected {tool}.")
         for record in decision.tool_executions:
-            append_audit_event(run, event_type="tool_started", actor="tool", summary=f"{record.tool_name} started.")
-            append_audit_event(run, event_type=f"tool_{record.status}", actor="tool", summary=f"{record.tool_name} {record.status}.", details=record.model_dump(mode="json"))
+            self._append_tool_execution_audit(run, record)
         append_audit_event(run, event_type="conflicts_detected", actor="agent", summary=f"{len(decision.conflicts)} conflict(s) detected.")
         append_audit_event(run, event_type="alternatives_generated", actor="agent", summary=f"{len(decision.alternatives)} alternative(s) generated.")
         append_audit_event(run, event_type="verifier_completed", actor="agent", summary="Verifier checks completed.")
         self._append_policy_audit(run, decision.policy_result)
         append_audit_event(run, event_type="recommendation_produced", actor="agent", summary=decision.final_summary)
+
+    def _append_tool_execution_audit(
+        self,
+        run: WorkflowRun,
+        record: ToolExecutionRecord,
+    ) -> None:
+        append_audit_event(
+            run,
+            event_type="tool_started",
+            actor="tool",
+            summary=f"{record.tool_name} started.",
+        )
+        if record.external_call:
+            for event in record.external_call.events:
+                details = {
+                    "run_id": str(run.id),
+                    "tool_name": record.tool_name,
+                    "attempt": event.attempt,
+                    "maximum_attempts": event.maximum_attempts,
+                    "failure_category": event.failure_category,
+                    "retryable": event.retryable,
+                    "retry_delay_seconds": event.retry_delay_seconds,
+                    "elapsed_ms": event.elapsed_ms,
+                    **event.details,
+                }
+                summary = {
+                    "external_call_started": f"{record.tool_name} external call attempt {event.attempt} started.",
+                    "external_call_succeeded": f"{record.tool_name} external call succeeded.",
+                    "external_call_retry_scheduled": f"{record.tool_name} retry scheduled.",
+                    "external_call_failed": f"{record.tool_name} external call attempt {event.attempt} failed safely.",
+                    "external_call_exhausted": f"{record.tool_name} external call attempts exhausted.",
+                    "alternative_evidence_selected": "Alternative Git activity evidence selected for unavailable Jira context.",
+                }[event.event_type]
+                append_audit_event(
+                    run,
+                    event_type=event.event_type,
+                    actor="tool",
+                    summary=summary,
+                    details=details,
+                )
+        append_audit_event(
+            run,
+            event_type=f"tool_{record.status}",
+            actor="tool",
+            summary=f"{record.tool_name} {record.status}.",
+            details={
+                "tool_name": record.tool_name,
+                "status": record.status,
+                "attempts": record.external_call.attempts if record.external_call else 1,
+                "failure_category": (
+                    record.external_call.failure_category if record.external_call else None
+                ),
+            },
+        )
 
     def _append_policy_audit(self, run: WorkflowRun, policy: PolicyResult) -> None:
         details = {

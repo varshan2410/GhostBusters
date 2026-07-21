@@ -12,6 +12,7 @@ from core.conftest_policy import ConftestPolicyEvaluator, default_policy_evaluat
 from core.investigator import collect_evidence
 from core.planner import create_investigation_plan
 from core.policy_engine import evaluate_policy
+from core.retry import RetryExecutor, default_retry_executor
 from core.verifier import run_verifier
 from integrations.registry import ToolRegistry
 
@@ -49,10 +50,17 @@ def analyze_resource(
     tool_registry: ToolRegistry,
     policy_evaluator: ConftestPolicyEvaluator | None = None,
     run_id: UUID | None = None,
+    retry_executor: RetryExecutor | None = None,
 ) -> DecisionRecord:
     selected_policy_evaluator = policy_evaluator or default_policy_evaluator
     plan = create_investigation_plan(goal, scenario, resource, tool_registry)
-    evidence, executions, missing = collect_evidence(plan, scenario, resource, tool_registry)
+    evidence, executions, missing = collect_evidence(
+        plan,
+        scenario,
+        resource,
+        tool_registry,
+        retry_executor or default_retry_executor,
+    )
     conflicts = detect_conflicts(evidence)
     alternatives = generate_alternatives(resource, evidence, missing, conflicts)
 
