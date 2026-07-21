@@ -1,0 +1,30 @@
+{
+  "format_version": "1.0",
+  "resource_changes": [
+    {
+      "address": "aws_instance.analysis",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "analysis",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "instance_type": "t3.large",
+          "tags": {
+            "Environment": "staging",
+            "Name": "ghostbusters-analysis"
+          }
+        },
+        "after": {
+          "instance_type": "m5.large",
+          "tags": {
+            "Environment": "staging",
+            "Name": "ghostbusters-analysis"
+          }
+        }
+      }
+    }
+  ]
+}
+

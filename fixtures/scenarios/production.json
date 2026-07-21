@@ -1,0 +1,40 @@
+{
+  "name": "production",
+  "description": "Production environment rightsizing request.",
+  "goal": "Assess production cost reduction with additional caution.",
+  "terraform_plan_file": "fixtures/terraform/production_plan.json",
+  "pricing": {
+    "available": true,
+    "current_monthly_cost": 640,
+    "proposed_monthly_cost": 420,
+    "currency": "USD"
+  },
+  "utilization": {
+    "available": true,
+    "average_cpu_pct": 44,
+    "peak_cpu_pct": 78,
+    "sample_window_days": 14
+  },
+  "jira": {
+    "available": true,
+    "issue_key": "FINOPS-404",
+    "status": "review"
+  },
+  "git_activity": {
+    "available": true,
+    "recent_commit_count": 0,
+    "days_since_last_commit": 21
+  },
+  "dependencies": {
+    "available": true,
+    "active_downstream_dependencies": [
+      "payments-api"
+    ],
+    "blocking_services": []
+  },
+  "expected_behavior": {
+    "decision": "production guardrail required",
+    "reason": "production change needs more scrutiny even with moderate utilization"
+  }
+}
+

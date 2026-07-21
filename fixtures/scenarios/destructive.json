@@ -1,0 +1,38 @@
+{
+  "name": "destructive",
+  "description": "Terraform plan contains a delete action.",
+  "goal": "Detect destructive infrastructure changes.",
+  "terraform_plan_file": "fixtures/terraform/destructive_plan.json",
+  "pricing": {
+    "available": true,
+    "current_monthly_cost": 240,
+    "proposed_monthly_cost": 0,
+    "currency": "USD"
+  },
+  "utilization": {
+    "available": true,
+    "average_cpu_pct": 64,
+    "peak_cpu_pct": 91,
+    "sample_window_days": 7
+  },
+  "jira": {
+    "available": true,
+    "issue_key": "FINOPS-303",
+    "status": "approved"
+  },
+  "git_activity": {
+    "available": true,
+    "recent_commit_count": 2,
+    "days_since_last_commit": 1
+  },
+  "dependencies": {
+    "available": true,
+    "active_downstream_dependencies": [],
+    "blocking_services": []
+  },
+  "expected_behavior": {
+    "decision": "treat as destructive",
+    "reason": "delete action should trigger safety scrutiny"
+  }
+}
+

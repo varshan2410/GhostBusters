@@ -1,0 +1,35 @@
+{
+  "name": "missing_evidence",
+  "description": "Important evidence sources are unavailable.",
+  "goal": "Verify explicit unavailable evidence handling.",
+  "terraform_plan_file": "fixtures/terraform/missing_evidence_plan.json",
+  "pricing": {
+    "available": false,
+    "reason": "billing export delayed"
+  },
+  "utilization": {
+    "available": true,
+    "average_cpu_pct": 22,
+    "peak_cpu_pct": 35,
+    "sample_window_days": 14
+  },
+  "jira": {
+    "available": true,
+    "issue_key": "FINOPS-606",
+    "status": "completed"
+  },
+  "git_activity": {
+    "available": true,
+    "recent_commit_count": 0,
+    "days_since_last_commit": 18
+  },
+  "dependencies": {
+    "available": false,
+    "reason": "dependency catalog sync unavailable"
+  },
+  "expected_behavior": {
+    "decision": "continue with partial evidence",
+    "reason": "pricing and dependency tools are unavailable"
+  }
+}
+

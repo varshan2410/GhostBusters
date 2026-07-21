@@ -1,0 +1,38 @@
+{
+  "name": "safe",
+  "description": "Staging EC2 right-sizing case with consistently low utilization.",
+  "goal": "Reduce staging compute cost safely.",
+  "terraform_plan_file": "fixtures/terraform/safe_plan.json",
+  "pricing": {
+    "available": true,
+    "current_monthly_cost": 140,
+    "proposed_monthly_cost": 70,
+    "currency": "USD"
+  },
+  "utilization": {
+    "available": true,
+    "average_cpu_pct": 18,
+    "peak_cpu_pct": 31,
+    "sample_window_days": 14
+  },
+  "jira": {
+    "available": true,
+    "issue_key": "FINOPS-101",
+    "status": "completed"
+  },
+  "git_activity": {
+    "available": true,
+    "recent_commit_count": 0,
+    "days_since_last_commit": 42
+  },
+  "dependencies": {
+    "available": true,
+    "active_downstream_dependencies": [],
+    "blocking_services": []
+  },
+  "expected_behavior": {
+    "decision": "safe to review",
+    "reason": "staging, low utilization, no dependencies, and completed Jira work"
+  }
+}
+
