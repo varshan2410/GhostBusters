@@ -20,11 +20,11 @@ def test_core_models_validate_typed_payloads() -> None:
         address="aws_instance.app",
         resource_type="aws_instance",
         actions=["update"],
-        before={"instance_type": "t3.large"},
-        after={"instance_type": "m5.xlarge"},
+        before={"instance_type": "m5.xlarge"},
+        after={"instance_type": "m5.large"},
         environment="staging",
-        current_instance_type="t3.large",
-        proposed_instance_type="m5.xlarge",
+        current_instance_type="m5.xlarge",
+        proposed_instance_type="m5.large",
         destructive=False,
         tags={"Environment": "staging"},
     )
@@ -89,4 +89,3 @@ def test_evidence_reliability_is_bounded() -> None:
             reliability=1.1,
             metadata={},
         )
-

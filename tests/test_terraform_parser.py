@@ -22,8 +22,8 @@ def test_safe_update_parsing_is_repository_relative(monkeypatch: pytest.MonkeyPa
     assert resource.resource_type == "aws_instance"
     assert resource.actions == ["update"]
     assert resource.environment == "staging"
-    assert resource.current_instance_type == "t3.large"
-    assert resource.proposed_instance_type == "m5.xlarge"
+    assert resource.current_instance_type == "m5.xlarge"
+    assert resource.proposed_instance_type == "m5.large"
     assert resource.tags == {"Environment": "staging", "Name": "ghostbusters-app"}
     assert resource.destructive is False
 
@@ -63,4 +63,3 @@ def test_malformed_terraform_json_raises_clear_error(tmp_path: Path) -> None:
 
     with pytest.raises(TerraformPlanFormatError, match="Malformed Terraform plan JSON"):
         parse_terraform_plan(plan_file)
-

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,6 +19,23 @@ VerifierStatus = Literal["passed", "warning", "failed"]
 VerifierSeverity = Literal["info", "low", "medium", "high", "critical"]
 PolicyStatus = Literal["passed", "blocked", "needs_human_context"]
 FinalStatus = Literal["recommendation_ready", "blocked", "abstained", "needs_human_context", "keep"]
+HumanReviewAction = Literal["approve", "reject", "request_evidence", "modify", "add_context"]
+
+
+class RunStatus(StrEnum):
+    created = "created"
+    planning = "planning"
+    investigating = "investigating"
+    verifying = "verifying"
+    blocked = "blocked"
+    abstained = "abstained"
+    keep = "keep"
+    pending_human_review = "pending_human_review"
+    needs_more_evidence = "needs_more_evidence"
+    approved = "approved"
+    rejected = "rejected"
+    pr_created = "pr_created"
+    failed_safely = "failed_safely"
 
 
 class AppModel(BaseModel):
@@ -177,3 +196,77 @@ class DecisionRecord(AppModel):
     policy_result: PolicyResult
     final_status: FinalStatus
     final_summary: str
+
+
+class StartRunRequest(AppModel):
+    goal: str
+    scenario_name: str
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    human_context: str | None = None
+    idempotency_key: str | None = None
+
+
+class HumanReviewRequest(AppModel):
+    action: HumanReviewAction
+    reviewer: str
+    comment: str | None = None
+    requested_sources: list[str] = Field(default_factory=list)
+    modified_action: AlternativeAction | None = None
+    human_context: str | None = None
+
+
+class HumanReviewRecord(AppModel):
+    reviewer: str
+    action: HumanReviewAction
+    comment: str | None = None
+    requested_sources: list[str] = Field(default_factory=list)
+    modified_action: AlternativeAction | None = None
+    human_context: str | None = None
+    created_at: datetime
+
+
+class AuditEvent(AppModel):
+    sequence_number: int
+    timestamp: datetime
+    event_type: str
+    actor: Literal["agent", "human", "policy", "system", "tool"]
+    summary: str
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class MockPullRequest(AppModel):
+    pr_number: int
+    repository: str
+    branch: str
+    base_branch: str
+    title: str
+    body: str
+    created_at: datetime
+    status: str
+    resource_id: str
+    chosen_action: str
+    current_instance_type: str | None = None
+    proposed_instance_type: str | None = None
+    terraform_patch_preview: str
+    monthly_savings: float
+    annual_savings: float
+    confidence: float
+    policy_summary: str
+    evidence_summary: list[str] = Field(default_factory=list)
+    human_approval_summary: str
+
+
+class WorkflowRun(AppModel):
+    id: UUID
+    goal: str
+    scenario_name: str
+    status: RunStatus
+    created_at: datetime
+    updated_at: datetime
+    decision_record: DecisionRecord | None = None
+    human_reviews: list[HumanReviewRecord] = Field(default_factory=list)
+    audit_events: list[AuditEvent] = Field(default_factory=list)
+    mock_pr: MockPullRequest | None = None
+    version: int = 1
+    idempotency_key: str | None = None
+    error: str | None = None

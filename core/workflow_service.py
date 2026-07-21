@@ -1,0 +1,358 @@
+"""Workflow execution service for GhostBusters runs."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+from uuid import UUID, uuid4
+
+from app.models import (
+    Alternative,
+    DecisionRecord,
+    EvidenceItem,
+    HumanReviewRecord,
+    HumanReviewRequest,
+    InvestigationPlan,
+    MissingEvidenceRecord,
+    RunStatus,
+    ScenarioDefinition,
+    StartRunRequest,
+    TerraformResourceChange,
+    ToolExecutionRecord,
+    WorkflowRun,
+)
+from core.alternative_generator import generate_alternatives
+from core.audit import append_audit_event
+from core.confidence import calculate_confidence
+from core.conflict_detector import detect_conflicts
+from core.human_review import (
+    HumanReviewError,
+    ensure_can_add_context,
+    ensure_can_approve,
+    ensure_can_modify,
+    ensure_can_reject,
+    ensure_can_request_evidence,
+)
+from core.investigator import CRITICAL_SOURCES, collect_evidence
+from core.mock_pr import create_mock_pull_request
+from core.policy_engine import evaluate_policy
+from core.reasoning_engine import _final_status, _select_preferred, analyze_resource
+from core.run_store import InMemoryRunStore, RunNotFoundError
+from core.verifier import run_verifier
+from integrations.base import utc_now
+from integrations.registry import ToolRegistry, default_registry
+from integrations.terraform_parser import parse_terraform_plan
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCENARIO_DIR = REPO_ROOT / "fixtures" / "scenarios"
+
+
+class ScenarioNotFoundError(Exception):
+    """Raised when a requested scenario fixture is missing."""
+
+
+class WorkflowConflictError(Exception):
+    """Raised for unsafe or invalid workflow transitions."""
+
+
+class WorkflowValidationError(Exception):
+    """Raised for invalid user supplied workflow data."""
+
+
+def list_scenarios() -> list[str]:
+    return sorted(path.stem for path in SCENARIO_DIR.glob("*.json"))
+
+
+def load_scenario(name: str) -> ScenarioDefinition:
+    path = SCENARIO_DIR / f"{name}.json"
+    if not path.exists():
+        raise ScenarioNotFoundError(f"Unknown scenario: {name}")
+    return ScenarioDefinition.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+
+def map_final_status(final_status: str) -> RunStatus:
+    return {
+        "recommendation_ready": RunStatus.pending_human_review,
+        "blocked": RunStatus.blocked,
+        "abstained": RunStatus.abstained,
+        "keep": RunStatus.keep,
+        "needs_human_context": RunStatus.needs_more_evidence,
+    }[final_status]
+
+
+class WorkflowService:
+    def __init__(
+        self,
+        store: InMemoryRunStore | None = None,
+        tool_registry: ToolRegistry | None = None,
+    ) -> None:
+        self.store = store or InMemoryRunStore()
+        self.tool_registry = tool_registry or default_registry
+
+    def start_run(self, request: StartRunRequest) -> tuple[WorkflowRun, bool]:
+        if request.idempotency_key:
+            existing = self.store.find_by_idempotency_key(request.idempotency_key)
+            if existing is not None:
+                return existing, False
+
+        scenario = load_scenario(request.scenario_name)
+        now = utc_now()
+        run = WorkflowRun(
+            id=uuid4(),
+            goal=request.goal,
+            scenario_name=request.scenario_name,
+            status=RunStatus.created,
+            created_at=now,
+            updated_at=now,
+            idempotency_key=request.idempotency_key,
+        )
+        append_audit_event(run, event_type="run_created", actor="system", summary="Run created.")
+        append_audit_event(run, event_type="goal_received", actor="agent", summary=request.goal, details={"constraints": request.constraints})
+        run = self.store.create(run)
+
+        def execute(current: WorkflowRun) -> WorkflowRun:
+            try:
+                current.status = RunStatus.planning
+                resource = parse_terraform_plan(scenario.terraform_plan_file)[0]
+                append_audit_event(current, event_type="terraform_parsed", actor="agent", summary="Terraform fixture parsed.", details={"resource_id": resource.address})
+                current.status = RunStatus.investigating
+                decision = analyze_resource(request.goal, scenario, resource, self.tool_registry)
+                if request.human_context:
+                    decision = self._add_context_to_decision(decision, resource, request.human_context, "starter")
+                current.decision_record = decision
+                current.status = map_final_status(decision.final_status)
+                self._copy_decision_audit(current, decision)
+            except Exception as exc:
+                current.status = RunStatus.failed_safely
+                current.error = str(exc)
+                append_audit_event(current, event_type="failure_handled_safely", actor="system", summary=str(exc))
+            current.updated_at = utc_now()
+            return current
+
+        return self.store.update(run.id, execute), True
+
+    def start_run_request(self, scenario_name: str, goal: str | None = None) -> tuple[WorkflowRun, bool]:
+        scenario = load_scenario(scenario_name)
+        return self.start_run(StartRunRequest(goal=goal or scenario.goal, scenario_name=scenario_name))
+
+    def get_run(self, run_id: UUID) -> WorkflowRun:
+        return self.store.get(run_id)
+
+    def list_runs(self) -> list[WorkflowRun]:
+        return self.store.list()
+
+    def reset(self) -> dict[str, str]:
+        self.store.delete_all()
+        return {"status": "ok"}
+
+    def review_run(self, run_id: UUID, request: HumanReviewRequest) -> tuple[WorkflowRun, bool]:
+        try:
+            existing = self.store.get(run_id)
+        except RunNotFoundError:
+            raise
+        if request.action == "approve" and existing.status == RunStatus.pr_created:
+            return existing, False
+
+        def update(current: WorkflowRun) -> WorkflowRun:
+            record = self._review_record(request)
+            if request.action == "approve":
+                self._approve(current, record)
+            elif request.action == "reject":
+                ensure_can_reject(current)
+                current.human_reviews.append(record)
+                append_audit_event(current, event_type="human_review_received", actor="human", summary="Run rejected.", details=record.model_dump(mode="json"))
+                current.status = RunStatus.rejected
+            elif request.action == "request_evidence":
+                self._request_evidence(current, request, record)
+            elif request.action == "add_context":
+                self._add_context(current, request, record)
+            elif request.action == "modify":
+                self._modify(current, request, record)
+            current.updated_at = utc_now()
+            return current
+
+        try:
+            return self.store.update(run_id, update), request.action == "approve"
+        except HumanReviewError as exc:
+            raise WorkflowConflictError(str(exc)) from exc
+
+    def _approve(self, run: WorkflowRun, record: HumanReviewRecord) -> None:
+        decision = ensure_can_approve(run)
+        scenario = load_scenario(run.scenario_name)
+        resource = parse_terraform_plan(scenario.terraform_plan_file)[0]
+        run.human_reviews.append(record)
+        append_audit_event(run, event_type="human_review_received", actor="human", summary="Approval received.", details=record.model_dump(mode="json"))
+        run.status = RunStatus.approved
+        run.mock_pr = create_mock_pull_request(
+            pr_number=len(self.store.list()) + 100,
+            goal=run.goal,
+            decision=decision,
+            resource=resource,
+            approval=record,
+        )
+        run.status = RunStatus.pr_created
+        append_audit_event(run, event_type="mock_pr_created", actor="agent", summary="Simulated remediation PR created.", details={"branch": run.mock_pr.branch})
+
+    def _request_evidence(self, run: WorkflowRun, request: HumanReviewRequest, record: HumanReviewRecord) -> None:
+        decision = ensure_can_request_evidence(run)
+        if not request.requested_sources:
+            raise HumanReviewError("requested_sources is required.")
+        unknown = sorted(set(request.requested_sources) - set(self.tool_registry.names()))
+        if unknown:
+            raise HumanReviewError(f"Unknown evidence source(s): {', '.join(unknown)}")
+        scenario = load_scenario(run.scenario_name)
+        resource = parse_terraform_plan(scenario.terraform_plan_file)[0]
+        run.human_reviews.append(record)
+        append_audit_event(run, event_type="additional_evidence_requested", actor="human", summary="Additional evidence requested.", details={"sources": request.requested_sources})
+        plan = InvestigationPlan(
+            goal=run.goal,
+            resource_id=resource.address,
+            selected_tools=list(request.requested_sources),
+            planning_notes=[f"Selected {source}: requested by human reviewer." for source in request.requested_sources],
+        )
+        evidence, records, _ = collect_evidence(plan, scenario, resource, self.tool_registry)
+        for record_item in records:
+            append_audit_event(run, event_type=f"tool_{record_item.status}", actor="tool", summary=f"{record_item.tool_name} {record_item.status}", details=record_item.model_dump(mode="json"))
+        merged_evidence = [item for item in decision.evidence if item.source not in set(request.requested_sources)] + evidence
+        run.decision_record = self._recalculate_decision(decision, resource, merged_evidence, decision.tool_executions + records)
+        run.status = map_final_status(run.decision_record.final_status)
+        append_audit_event(run, event_type="workflow_resumed", actor="agent", summary="Workflow resumed after evidence request.", details={"status": run.status})
+
+    def _add_context(self, run: WorkflowRun, request: HumanReviewRequest, record: HumanReviewRecord) -> None:
+        decision = ensure_can_add_context(run, request)
+        scenario = load_scenario(run.scenario_name)
+        resource = parse_terraform_plan(scenario.terraform_plan_file)[0]
+        run.human_reviews.append(record)
+        context = EvidenceItem(
+            source="human_review",
+            tool_name="human_context",
+            claim="human supplied context",
+            value=request.human_context,
+            resource_id=resource.address,
+            collected_at=utc_now(),
+            freshness_status="fresh",
+            reliability=1.0,
+            metadata={"reviewer": request.reviewer, "timestamp": record.created_at.isoformat()},
+        )
+        evidence = decision.evidence + [context]
+        run.decision_record = self._recalculate_decision(decision, resource, evidence, decision.tool_executions)
+        run.status = map_final_status(run.decision_record.final_status)
+        append_audit_event(run, event_type="human_context_added", actor="human", summary="Human context added.", details={"reviewer": request.reviewer})
+        append_audit_event(run, event_type="workflow_resumed", actor="agent", summary="Workflow resumed after human context.", details={"status": run.status})
+
+    def _modify(self, run: WorkflowRun, request: HumanReviewRequest, record: HumanReviewRecord) -> None:
+        decision = ensure_can_modify(run, request)
+        alternative = next((item for item in decision.alternatives if item.action == request.modified_action), None)
+        if alternative is None:
+            raise HumanReviewError("Requested action is not in generated alternatives.")
+        if not alternative.eligible:
+            raise HumanReviewError("Requested alternative is not eligible.")
+        if request.modified_action in {"request_evidence", "abstain", "keep"}:
+            raise HumanReviewError("Only remediation alternatives can be modified for approval.")
+        scenario = load_scenario(run.scenario_name)
+        resource = parse_terraform_plan(scenario.terraform_plan_file)[0]
+        revised = decision.model_copy(deep=True)
+        revised.preferred_action = str(request.modified_action)
+        verifier = run_verifier(resource, revised.evidence, revised.conflicts, alternative)
+        policy = evaluate_policy(resource, revised.evidence, revised.missing_evidence, alternative, verifier, revised.conflicts)
+        if not policy.allowed:
+            raise HumanReviewError("Policy does not allow the modified action.")
+        revised.verifier_findings = verifier
+        revised.policy_result = policy
+        revised.confidence = calculate_confidence(revised.evidence, revised.missing_evidence, revised.conflicts, policy, revised.investigation_plan.selected_tools)
+        revised.final_status = _final_status(alternative, policy)  # type: ignore[assignment]
+        revised.final_summary = f"Preferred action modified to {alternative.action}. Policy status is {policy.status}."
+        run.decision_record = revised
+        run.human_reviews.append(record)
+        run.status = RunStatus.pending_human_review
+        append_audit_event(run, event_type="preferred_action_modified", actor="human", summary=f"Preferred action modified to {alternative.action}.", details=record.model_dump(mode="json"))
+
+    def _add_context_to_decision(self, decision: DecisionRecord, resource: TerraformResourceChange, context: str, reviewer: str) -> DecisionRecord:
+        item = EvidenceItem(
+            source="human_review",
+            tool_name="human_context",
+            claim="human supplied context",
+            value=context,
+            resource_id=resource.address,
+            collected_at=utc_now(),
+            freshness_status="fresh",
+            reliability=1.0,
+            metadata={"reviewer": reviewer},
+        )
+        return self._recalculate_decision(decision, resource, decision.evidence + [item], decision.tool_executions)
+
+    def _recalculate_decision(
+        self,
+        prior: DecisionRecord,
+        resource: TerraformResourceChange,
+        evidence: list[EvidenceItem],
+        executions: list[ToolExecutionRecord],
+    ) -> DecisionRecord:
+        missing = self._missing_from_evidence(evidence)
+        conflicts = detect_conflicts(evidence)
+        alternatives = generate_alternatives(resource, evidence, missing, conflicts)
+        hard_block = resource.destructive and prior.preferred_action != "request_evidence" or (resource.environment or "").lower() == "production"
+        preferred = _select_preferred(alternatives, hard_block)
+        verifier = run_verifier(resource, evidence, conflicts, preferred)
+        policy = evaluate_policy(resource, evidence, missing, preferred, verifier, conflicts)
+        confidence = calculate_confidence(evidence, missing, conflicts, policy, prior.investigation_plan.selected_tools)
+        final_status = _final_status(preferred, policy)
+        return prior.model_copy(
+            deep=True,
+            update={
+                "tool_executions": executions,
+                "evidence": evidence,
+                "conflicts": conflicts,
+                "missing_evidence": missing,
+                "alternatives": alternatives,
+                "preferred_action": preferred.action,
+                "confidence": confidence,
+                "verifier_findings": verifier,
+                "policy_result": policy,
+                "final_status": final_status,
+                "final_summary": f"Preferred action is {preferred.action}. Policy status is {policy.status}. Confidence is {confidence.final_confidence:.2f}.",
+            },
+        )
+
+    def _missing_from_evidence(self, evidence: list[EvidenceItem]) -> list[MissingEvidenceRecord]:
+        missing: list[MissingEvidenceRecord] = []
+        for item in evidence:
+            if item.freshness_status == "unavailable":
+                missing.append(
+                    MissingEvidenceRecord(
+                        source=item.source,
+                        claim_needed=item.claim,
+                        critical=item.source in CRITICAL_SOURCES,
+                        impact="Critical evidence is unavailable." if item.source in CRITICAL_SOURCES else "Context is incomplete.",
+                    )
+                )
+        return missing
+
+    def _copy_decision_audit(self, run: WorkflowRun, decision: DecisionRecord) -> None:
+        append_audit_event(run, event_type="investigation_plan_created", actor="agent", summary="Investigation plan created.", details={"selected_tools": decision.investigation_plan.selected_tools})
+        for tool in decision.investigation_plan.selected_tools:
+            append_audit_event(run, event_type="tool_selected", actor="agent", summary=f"Selected {tool}.")
+        for record in decision.tool_executions:
+            append_audit_event(run, event_type="tool_started", actor="tool", summary=f"{record.tool_name} started.")
+            append_audit_event(run, event_type=f"tool_{record.status}", actor="tool", summary=f"{record.tool_name} {record.status}.", details=record.model_dump(mode="json"))
+        append_audit_event(run, event_type="conflicts_detected", actor="agent", summary=f"{len(decision.conflicts)} conflict(s) detected.")
+        append_audit_event(run, event_type="alternatives_generated", actor="agent", summary=f"{len(decision.alternatives)} alternative(s) generated.")
+        append_audit_event(run, event_type="verifier_completed", actor="agent", summary="Verifier checks completed.")
+        append_audit_event(run, event_type="policy_evaluated", actor="policy", summary=f"Policy status: {decision.policy_result.status}.")
+        append_audit_event(run, event_type="recommendation_produced", actor="agent", summary=decision.final_summary)
+
+    def _review_record(self, request: HumanReviewRequest) -> HumanReviewRecord:
+        return HumanReviewRecord(
+            reviewer=request.reviewer,
+            action=request.action,
+            comment=request.comment,
+            requested_sources=request.requested_sources,
+            modified_action=request.modified_action,
+            human_context=request.human_context,
+            created_at=utc_now(),
+        )
+
+
+workflow_service = WorkflowService()
