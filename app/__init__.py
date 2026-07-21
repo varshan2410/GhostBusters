@@ -1,0 +1,2 @@
+"""GhostBusters application package."""
+
