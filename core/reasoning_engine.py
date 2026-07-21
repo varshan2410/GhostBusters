@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from app.models import Alternative, DecisionRecord, PolicyResult, ScenarioDefinition, TerraformResourceChange
 from core.alternative_generator import generate_alternatives
 from core.confidence import calculate_confidence
 from core.conflict_detector import detect_conflicts
+from core.conftest_policy import ConftestPolicyEvaluator, default_policy_evaluator
 from core.investigator import collect_evidence
 from core.planner import create_investigation_plan
 from core.policy_engine import evaluate_policy
@@ -44,7 +47,10 @@ def analyze_resource(
     scenario: ScenarioDefinition,
     resource: TerraformResourceChange,
     tool_registry: ToolRegistry,
+    policy_evaluator: ConftestPolicyEvaluator | None = None,
+    run_id: UUID | None = None,
 ) -> DecisionRecord:
+    selected_policy_evaluator = policy_evaluator or default_policy_evaluator
     plan = create_investigation_plan(goal, scenario, resource, tool_registry)
     evidence, executions, missing = collect_evidence(plan, scenario, resource, tool_registry)
     conflicts = detect_conflicts(evidence)
@@ -55,14 +61,41 @@ def analyze_resource(
     preferred = _select_preferred(alternatives, hard_block)
     initial_policy = evaluate_policy(resource, evidence, missing, preferred, conflicts=conflicts)
     verifier_findings = run_verifier(resource, evidence, conflicts, preferred)
-    policy = evaluate_policy(resource, evidence, missing, preferred, verifier_findings, conflicts)
+    provisional_confidence = calculate_confidence(
+        evidence, missing, conflicts, initial_policy, plan.selected_tools
+    )
+    policy = selected_policy_evaluator.evaluate(
+        resource,
+        evidence,
+        missing,
+        preferred,
+        verifier_findings,
+        conflicts,
+        provisional_confidence,
+        run_id=run_id,
+        scenario_name=scenario.name,
+    )
 
     if not policy.allowed and preferred.action in {"downsize", "schedule"}:
         preferred = next(item for item in alternatives if item.action == "keep")
         verifier_findings = run_verifier(resource, evidence, conflicts, preferred)
-        policy = evaluate_policy(resource, evidence, missing, preferred, verifier_findings, conflicts)
-        if resource.destructive or (resource.environment or "").lower() == "production":
-            policy = initial_policy
+        keep_python_policy = evaluate_policy(
+            resource, evidence, missing, preferred, verifier_findings, conflicts
+        )
+        keep_confidence = calculate_confidence(
+            evidence, missing, conflicts, keep_python_policy, plan.selected_tools
+        )
+        policy = selected_policy_evaluator.evaluate(
+            resource,
+            evidence,
+            missing,
+            preferred,
+            verifier_findings,
+            conflicts,
+            keep_confidence,
+            run_id=run_id,
+            scenario_name=scenario.name,
+        )
 
     confidence = calculate_confidence(
         evidence=evidence,

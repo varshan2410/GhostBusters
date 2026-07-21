@@ -15,6 +15,7 @@ from app.models import (
     HumanReviewRequest,
     InvestigationPlan,
     MissingEvidenceRecord,
+    PolicyResult,
     RunStatus,
     ScenarioDefinition,
     StartRunRequest,
@@ -25,6 +26,7 @@ from app.models import (
 from core.alternative_generator import generate_alternatives
 from core.audit import append_audit_event
 from core.confidence import calculate_confidence
+from core.conftest_policy import ConftestPolicyEvaluator, default_policy_evaluator
 from core.conflict_detector import detect_conflicts
 from core.human_review import (
     HumanReviewError,
@@ -88,9 +90,11 @@ class WorkflowService:
         self,
         store: RunStore | None = None,
         tool_registry: ToolRegistry | None = None,
+        policy_evaluator: ConftestPolicyEvaluator | None = None,
     ) -> None:
         self.store = store or build_run_store()
         self.tool_registry = tool_registry or default_registry
+        self.policy_evaluator = policy_evaluator or default_policy_evaluator
 
     def start_run(self, request: StartRunRequest) -> tuple[WorkflowRun, bool]:
         if request.idempotency_key:
@@ -126,9 +130,23 @@ class WorkflowService:
                 resource = parse_terraform_plan(scenario.terraform_plan_file)[0]
                 append_audit_event(current, event_type="terraform_parsed", actor="agent", summary="Terraform fixture parsed.", details={"resource_id": resource.address})
                 current.status = RunStatus.investigating
-                decision = analyze_resource(request.goal, scenario, resource, self.tool_registry)
+                decision = analyze_resource(
+                    request.goal,
+                    scenario,
+                    resource,
+                    self.tool_registry,
+                    self.policy_evaluator,
+                    current.id,
+                )
                 if request.human_context:
-                    decision = self._add_context_to_decision(decision, resource, request.human_context, "starter")
+                    decision = self._add_context_to_decision(
+                        decision,
+                        resource,
+                        request.human_context,
+                        "starter",
+                        current.id,
+                        current.scenario_name,
+                    )
                 current.decision_record = decision
                 current.status = map_final_status(decision.final_status)
                 self._copy_decision_audit(current, decision)
@@ -224,8 +242,16 @@ class WorkflowService:
         for record_item in records:
             append_audit_event(run, event_type=f"tool_{record_item.status}", actor="tool", summary=f"{record_item.tool_name} {record_item.status}", details=record_item.model_dump(mode="json"))
         merged_evidence = [item for item in decision.evidence if item.source not in set(request.requested_sources)] + evidence
-        run.decision_record = self._recalculate_decision(decision, resource, merged_evidence, decision.tool_executions + records)
+        run.decision_record = self._recalculate_decision(
+            decision,
+            resource,
+            merged_evidence,
+            decision.tool_executions + records,
+            run.id,
+            run.scenario_name,
+        )
         run.status = map_final_status(run.decision_record.final_status)
+        self._append_policy_audit(run, run.decision_record.policy_result)
         append_audit_event(run, event_type="workflow_resumed", actor="agent", summary="Workflow resumed after evidence request.", details={"status": run.status})
 
     def _add_context(self, run: WorkflowRun, request: HumanReviewRequest, record: HumanReviewRecord) -> None:
@@ -245,8 +271,16 @@ class WorkflowService:
             metadata={"reviewer": request.reviewer, "timestamp": record.created_at.isoformat()},
         )
         evidence = decision.evidence + [context]
-        run.decision_record = self._recalculate_decision(decision, resource, evidence, decision.tool_executions)
+        run.decision_record = self._recalculate_decision(
+            decision,
+            resource,
+            evidence,
+            decision.tool_executions,
+            run.id,
+            run.scenario_name,
+        )
         run.status = map_final_status(run.decision_record.final_status)
+        self._append_policy_audit(run, run.decision_record.policy_result)
         append_audit_event(run, event_type="human_context_added", actor="human", summary="Human context added.", details={"reviewer": request.reviewer})
         append_audit_event(run, event_type="workflow_resumed", actor="agent", summary="Workflow resumed after human context.", details={"status": run.status})
 
@@ -264,7 +298,32 @@ class WorkflowService:
         revised = decision.model_copy(deep=True)
         revised.preferred_action = str(request.modified_action)
         verifier = run_verifier(resource, revised.evidence, revised.conflicts, alternative)
-        policy = evaluate_policy(resource, revised.evidence, revised.missing_evidence, alternative, verifier, revised.conflicts)
+        python_policy = evaluate_policy(
+            resource,
+            revised.evidence,
+            revised.missing_evidence,
+            alternative,
+            verifier,
+            revised.conflicts,
+        )
+        provisional_confidence = calculate_confidence(
+            revised.evidence,
+            revised.missing_evidence,
+            revised.conflicts,
+            python_policy,
+            revised.investigation_plan.selected_tools,
+        )
+        policy = self.policy_evaluator.evaluate(
+            resource,
+            revised.evidence,
+            revised.missing_evidence,
+            alternative,
+            verifier,
+            revised.conflicts,
+            provisional_confidence,
+            run_id=run.id,
+            scenario_name=run.scenario_name,
+        )
         if not policy.allowed:
             raise HumanReviewError("Policy does not allow the modified action.")
         revised.verifier_findings = verifier
@@ -275,9 +334,18 @@ class WorkflowService:
         run.decision_record = revised
         run.human_reviews.append(record)
         run.status = RunStatus.pending_human_review
+        self._append_policy_audit(run, policy)
         append_audit_event(run, event_type="preferred_action_modified", actor="human", summary=f"Preferred action modified to {alternative.action}.", details=record.model_dump(mode="json"))
 
-    def _add_context_to_decision(self, decision: DecisionRecord, resource: TerraformResourceChange, context: str, reviewer: str) -> DecisionRecord:
+    def _add_context_to_decision(
+        self,
+        decision: DecisionRecord,
+        resource: TerraformResourceChange,
+        context: str,
+        reviewer: str,
+        run_id: UUID | None = None,
+        scenario_name: str | None = None,
+    ) -> DecisionRecord:
         item = EvidenceItem(
             source="human_review",
             tool_name="human_context",
@@ -289,7 +357,14 @@ class WorkflowService:
             reliability=1.0,
             metadata={"reviewer": reviewer},
         )
-        return self._recalculate_decision(decision, resource, decision.evidence + [item], decision.tool_executions)
+        return self._recalculate_decision(
+            decision,
+            resource,
+            decision.evidence + [item],
+            decision.tool_executions,
+            run_id,
+            scenario_name,
+        )
 
     def _recalculate_decision(
         self,
@@ -297,6 +372,8 @@ class WorkflowService:
         resource: TerraformResourceChange,
         evidence: list[EvidenceItem],
         executions: list[ToolExecutionRecord],
+        run_id: UUID | None = None,
+        scenario_name: str | None = None,
     ) -> DecisionRecord:
         missing = self._missing_from_evidence(evidence)
         conflicts = detect_conflicts(evidence)
@@ -304,7 +381,21 @@ class WorkflowService:
         hard_block = resource.destructive and prior.preferred_action != "request_evidence" or (resource.environment or "").lower() == "production"
         preferred = _select_preferred(alternatives, hard_block)
         verifier = run_verifier(resource, evidence, conflicts, preferred)
-        policy = evaluate_policy(resource, evidence, missing, preferred, verifier, conflicts)
+        python_policy = evaluate_policy(resource, evidence, missing, preferred, verifier, conflicts)
+        provisional_confidence = calculate_confidence(
+            evidence, missing, conflicts, python_policy, prior.investigation_plan.selected_tools
+        )
+        policy = self.policy_evaluator.evaluate(
+            resource,
+            evidence,
+            missing,
+            preferred,
+            verifier,
+            conflicts,
+            provisional_confidence,
+            run_id=run_id,
+            scenario_name=scenario_name,
+        )
         confidence = calculate_confidence(evidence, missing, conflicts, policy, prior.investigation_plan.selected_tools)
         final_status = _final_status(preferred, policy)
         return prior.model_copy(
@@ -348,8 +439,51 @@ class WorkflowService:
         append_audit_event(run, event_type="conflicts_detected", actor="agent", summary=f"{len(decision.conflicts)} conflict(s) detected.")
         append_audit_event(run, event_type="alternatives_generated", actor="agent", summary=f"{len(decision.alternatives)} alternative(s) generated.")
         append_audit_event(run, event_type="verifier_completed", actor="agent", summary="Verifier checks completed.")
-        append_audit_event(run, event_type="policy_evaluated", actor="policy", summary=f"Policy status: {decision.policy_result.status}.")
+        self._append_policy_audit(run, decision.policy_result)
         append_audit_event(run, event_type="recommendation_produced", actor="agent", summary=decision.final_summary)
+
+    def _append_policy_audit(self, run: WorkflowRun, policy: PolicyResult) -> None:
+        details = {
+            "engine": policy.engine,
+            "policy_version": policy.policy_version,
+            "allowed": policy.allowed,
+            "violation_codes": [item.code for item in policy.violations],
+        }
+        append_audit_event(
+            run,
+            event_type="policy_evaluation_started",
+            actor="policy",
+            summary="Policy evaluation started.",
+        )
+        append_audit_event(
+            run,
+            event_type="policy_engine_selected",
+            actor="policy",
+            summary=f"Policy engine selected: {policy.engine}.",
+            details={"engine": policy.engine},
+        )
+        if policy.fallback_reason:
+            append_audit_event(
+                run,
+                event_type="policy_fallback_used",
+                actor="policy",
+                summary="Deterministic Python policy fallback used.",
+                details={"reason": policy.fallback_reason},
+            )
+        append_audit_event(
+            run,
+            event_type="policy_evaluation_completed",
+            actor="policy",
+            summary=f"Policy {'allowed' if policy.allowed else 'denied'} the recommendation.",
+            details=details,
+        )
+        append_audit_event(
+            run,
+            event_type="policy_evaluated",
+            actor="policy",
+            summary=f"Policy status: {policy.status}.",
+            details=details,
+        )
 
     def _review_record(self, request: HumanReviewRequest) -> HumanReviewRecord:
         return HumanReviewRecord(

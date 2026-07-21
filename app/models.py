@@ -18,6 +18,7 @@ AlternativeAction = Literal["keep", "downsize", "schedule", "request_evidence", 
 VerifierStatus = Literal["passed", "warning", "failed"]
 VerifierSeverity = Literal["info", "low", "medium", "high", "critical"]
 PolicyStatus = Literal["passed", "blocked", "needs_human_context"]
+PolicyEngine = Literal["python", "conftest", "python_fallback"]
 FinalStatus = Literal["recommendation_ready", "blocked", "abstained", "needs_human_context", "keep"]
 HumanReviewAction = Literal["approve", "reject", "request_evidence", "modify", "add_context"]
 
@@ -172,6 +173,12 @@ class VerifierFinding(AppModel):
     evidence_sources: list[str] = Field(default_factory=list)
 
 
+class PolicyViolation(AppModel):
+    code: str
+    message: str
+    severity: VerifierSeverity = "critical"
+
+
 class PolicyResult(AppModel):
     allowed: bool
     status: PolicyStatus
@@ -179,6 +186,10 @@ class PolicyResult(AppModel):
     warnings: list[str] = Field(default_factory=list)
     evaluated_rules: list[str] = Field(default_factory=list)
     requires_human_approval: bool = False
+    engine: PolicyEngine = "python"
+    policy_version: str = "1.0"
+    violations: list[PolicyViolation] = Field(default_factory=list)
+    fallback_reason: str | None = None
 
 
 class DecisionRecord(AppModel):

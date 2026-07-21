@@ -8,6 +8,7 @@ from app.models import (
     EvidenceItem,
     MissingEvidenceRecord,
     PolicyResult,
+    PolicyViolation,
     TerraformResourceChange,
     VerifierFinding,
 )
@@ -21,6 +22,10 @@ def evaluate_policy(
     preferred: Alternative,
     verifier_findings: list[VerifierFinding] | None = None,
     conflicts: list[ConflictRecord] | None = None,
+    *,
+    ownership_known: bool = True,
+    confidence_score: float | None = None,
+    minimum_confidence: float = 0.70,
 ) -> PolicyResult:
     evaluated_rules = [
         "terraform_delete_blocks_remediation",
@@ -31,6 +36,8 @@ def evaluate_policy(
         "high_peak_utilization_prevents_downsizing",
         "positive_savings_required_for_downsizing",
         "human_approval_required_for_remediation",
+        "known_ownership_required_for_remediation",
+        "minimum_confidence_required_for_remediation",
     ]
     blocking: list[str] = []
     warnings: list[str] = []
@@ -47,6 +54,14 @@ def evaluate_policy(
         blocking.append("Terraform delete or replacement containing delete blocks remediation.")
     if remediation and (resource.environment or "").lower() == "production":
         blocking.append("Production resource blocks automated remediation.")
+    if remediation and not ownership_known:
+        blocking.append("Resource ownership is unknown; remediation is blocked.")
+    if remediation and any(item.critical for item in missing_evidence):
+        blocking.append("Missing critical evidence prevents remediation.")
+    if remediation and confidence_score is not None and confidence_score < minimum_confidence:
+        blocking.append(
+            f"Confidence {confidence_score:.2f} is below the required threshold {minimum_confidence:.2f}."
+        )
     if (remediation or abstain_action) and active_dependencies(evidence):
         blocking.append("Active dependency prevents remediation.")
 
@@ -82,6 +97,14 @@ def evaluate_policy(
             context_reasons.append("Additional human context was requested before making a recommendation.")
 
     if blocking:
+        violations = [
+            PolicyViolation(
+                code=_violation_code(reason),
+                message=reason,
+                severity="critical",
+            )
+            for reason in sorted(set(blocking))
+        ]
         return PolicyResult(
             allowed=False,
             status="blocked",
@@ -89,6 +112,7 @@ def evaluate_policy(
             warnings=warnings,
             evaluated_rules=evaluated_rules,
             requires_human_approval=False,
+            violations=violations,
         )
 
     if context_reasons:
@@ -109,3 +133,21 @@ def evaluate_policy(
         evaluated_rules=evaluated_rules,
         requires_human_approval=remediation,
     )
+
+
+def _violation_code(reason: str) -> str:
+    if "Production" in reason:
+        return "PRODUCTION_REMEDIATION_BLOCKED"
+    if "Terraform delete" in reason:
+        return "DESTRUCTIVE_ACTION_BLOCKED"
+    if "ownership" in reason:
+        return "UNKNOWN_OWNERSHIP"
+    if "dependency" in reason:
+        return "ACTIVE_DEPENDENCY"
+    if "Missing critical" in reason or "Missing critical utilization" in reason:
+        return "MISSING_CRITICAL_EVIDENCE"
+    if "verifier" in reason:
+        return "CRITICAL_VERIFIER_FAILURE"
+    if "Confidence" in reason:
+        return "LOW_CONFIDENCE"
+    return "POLICY_VIOLATION"
