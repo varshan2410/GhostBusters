@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from app.models import HealthResponse, HumanReviewRequest, StartRunRequest, WorkflowRun
 from app.settings import settings
 from core.run_store import RunNotFoundError
+from core.storage_factory import build_webhook_deduplicator
 from core.workflow_service import (
     ScenarioNotFoundError,
     WorkflowConflictError,
@@ -21,6 +22,7 @@ from core.workflow_service import (
 
 app = FastAPI(title="GhostBusters", version="0.1.0")
 static_path = Path(__file__).resolve().parent.parent / settings.static_dir
+webhook_deduplicator = build_webhook_deduplicator()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -98,6 +100,12 @@ async def github_webhook(
     action = payload.get("action")
     if action not in {"opened", "reopened", "synchronize"}:
         return {"status": "ignored", "reason": f"Unsupported pull_request action: {action}"}
+    cached_run_id = webhook_deduplicator.get_run_id(x_github_delivery)
+    if cached_run_id is not None:
+        try:
+            return {"status": "duplicate", "run": workflow_service.get_run(cached_run_id)}
+        except RunNotFoundError:
+            pass
     goal = payload.get("goal") or "Analyze Terraform pull request for safe FinOps remediation."
     scenario_name = payload.get("scenario_name") or "safe"
     try:
@@ -110,5 +118,6 @@ async def github_webhook(
         )
     except ScenarioNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    webhook_deduplicator.remember(x_github_delivery, run.id)
     response.status_code = 201 if created else 200
     return {"status": "created" if created else "duplicate", "run": run}

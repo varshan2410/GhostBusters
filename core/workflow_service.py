@@ -38,7 +38,8 @@ from core.investigator import CRITICAL_SOURCES, collect_evidence
 from core.mock_pr import create_mock_pull_request
 from core.policy_engine import evaluate_policy
 from core.reasoning_engine import _final_status, _select_preferred, analyze_resource
-from core.run_store import InMemoryRunStore, RunNotFoundError
+from core.run_store import DuplicateIdempotencyKeyError, RunNotFoundError, RunStore
+from core.storage_factory import build_run_store
 from core.verifier import run_verifier
 from integrations.base import utc_now
 from integrations.registry import ToolRegistry, default_registry
@@ -85,10 +86,10 @@ def map_final_status(final_status: str) -> RunStatus:
 class WorkflowService:
     def __init__(
         self,
-        store: InMemoryRunStore | None = None,
+        store: RunStore | None = None,
         tool_registry: ToolRegistry | None = None,
     ) -> None:
-        self.store = store or InMemoryRunStore()
+        self.store = store or build_run_store()
         self.tool_registry = tool_registry or default_registry
 
     def start_run(self, request: StartRunRequest) -> tuple[WorkflowRun, bool]:
@@ -110,7 +111,14 @@ class WorkflowService:
         )
         append_audit_event(run, event_type="run_created", actor="system", summary="Run created.")
         append_audit_event(run, event_type="goal_received", actor="agent", summary=request.goal, details={"constraints": request.constraints})
-        run = self.store.create(run)
+        try:
+            run = self.store.create(run)
+        except DuplicateIdempotencyKeyError:
+            if request.idempotency_key:
+                existing = self.store.find_by_idempotency_key(request.idempotency_key)
+                if existing is not None:
+                    return existing, False
+            raise
 
         def execute(current: WorkflowRun) -> WorkflowRun:
             try:

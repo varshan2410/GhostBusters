@@ -4,4 +4,6 @@ pydantic
 pytest
 httpx
 python-dotenv
+psycopg[binary]
+redis
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from threading import RLock
+from typing import Protocol
 from uuid import UUID
 
 from app.models import WorkflowRun
@@ -19,6 +20,20 @@ class RunNotFoundError(RunStoreError):
 
 class DuplicateIdempotencyKeyError(RunStoreError):
     """Raised when an idempotency key already exists."""
+
+
+RunUpdater = Callable[[WorkflowRun], WorkflowRun] | WorkflowRun
+
+
+class RunStore(Protocol):
+    """Storage boundary used by the workflow service."""
+
+    def create(self, run: WorkflowRun) -> WorkflowRun: ...
+    def get(self, run_id: UUID) -> WorkflowRun: ...
+    def list(self) -> list[WorkflowRun]: ...
+    def update(self, run_id: UUID, updater: RunUpdater) -> WorkflowRun: ...
+    def find_by_idempotency_key(self, key: str) -> WorkflowRun | None: ...
+    def delete_all(self) -> None: ...
 
 
 class InMemoryRunStore:
@@ -47,7 +62,7 @@ class InMemoryRunStore:
     def update(
         self,
         run_id: UUID,
-        updater: Callable[[WorkflowRun], WorkflowRun] | WorkflowRun,
+        updater: RunUpdater,
     ) -> WorkflowRun:
         with self._lock:
             current = self._runs.get(run_id)
