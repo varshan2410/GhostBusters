@@ -36,6 +36,8 @@ def test_destructive_scenario_hard_blocks_without_evidence_calls() -> None:
 
     assert decision.investigation_plan.selected_tools == []
     assert decision.tool_executions == []
+    assert [question.id for question in decision.investigation_plan.questions] == ["policy_destructive"]
+    assert decision.investigation_plan.questions[0].status == "skipped"
     assert decision.preferred_action == "blocked"
     assert decision.policy_result.allowed is False
     assert decision.policy_result.status == "blocked"
@@ -48,6 +50,8 @@ def test_production_scenario_hard_blocks_without_optimization_tools() -> None:
     decision = analyze_resource(scenario.goal, scenario, load_resource("production"), default_registry)
 
     assert decision.investigation_plan.selected_tools == []
+    assert [question.id for question in decision.investigation_plan.questions] == ["policy_production"]
+    assert decision.investigation_plan.questions[0].status == "skipped"
     assert decision.preferred_action == "blocked"
     assert decision.policy_result.allowed is False
     assert decision.policy_result.status == "blocked"
@@ -77,6 +81,9 @@ def test_missing_evidence_scenario_records_missing_and_does_not_fabricate_values
     assert decision.policy_result.allowed is False
     assert decision.policy_result.status == "needs_human_context"
     assert any("Critical missing evidence" in reason for reason in decision.policy_result.blocking_reasons)
+    questions = {question.id: question for question in decision.investigation_plan.questions}
+    assert questions["cost_impact"].status == "failed"
+    assert questions["dependencies"].status == "failed"
 
 
 def test_negative_savings_cannot_produce_downsize_recommendation() -> None:
@@ -105,6 +112,9 @@ def test_tool_failure_does_not_crash_reasoning_engine() -> None:
 
     assert any(record.status == "failed" for record in decision.tool_executions)
     assert decision.final_status in {"needs_human_context", "blocked", "keep"}
+    questions = {question.id: question for question in decision.investigation_plan.questions}
+    assert questions["cost_impact"].status == "failed"
+    assert questions["project_context"].status != "resolved"
 
 
 def test_results_are_deterministic_for_same_input() -> None:
@@ -115,3 +125,21 @@ def test_results_are_deterministic_for_same_input() -> None:
     assert first.preferred_action == second.preferred_action
     assert first.investigation_plan.selected_tools == second.investigation_plan.selected_tools
     assert first.confidence.final_confidence == second.confidence.final_confidence
+
+
+def test_partial_question_evidence_stays_unresolved_with_missing_fields() -> None:
+    scenario = load_scenario("safe").model_copy(
+        update={
+            "utilization": {
+                "available": True,
+                "average_cpu_pct": 18,
+                "peak_cpu_pct": None,
+                "sample_window_days": 14,
+            }
+        }
+    )
+    decision = analyze_resource(scenario.goal, scenario, load_resource("safe"), default_registry)
+
+    questions = {question.id: question for question in decision.investigation_plan.questions}
+    assert questions["utilization"].status == "unresolved"
+    assert "peak_cpu_pct" in questions["utilization"].resolution_summary
