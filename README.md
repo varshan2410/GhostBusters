@@ -15,6 +15,15 @@ python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
+Start local PostgreSQL and Redis with Docker Compose:
+
+```powershell
+docker compose up -d
+docker compose ps
+```
+
+The local Docker PostgreSQL endpoint is `localhost:15432`, mapped to container port `5432`. Redis remains available on `localhost:6379`.
+
 Start the API from the repository directory:
 
 ```powershell
@@ -219,7 +228,7 @@ All current pricing, utilization, Jira, Git activity, and dependency providers r
 
 ## Persistence
 
-When `DATABASE_URL` is set, workflow snapshots, evidence records, approvals, waivers, and audit events are stored in PostgreSQL. When it is absent, tests and lightweight development can use the in-memory store. Redis provides short-lived GitHub delivery lookup; PostgreSQL idempotency is the durable fallback.
+When `DATABASE_URL` is set, workflow snapshots, evidence records, approvals, waivers, and audit events are stored in PostgreSQL. For the local Docker setup, use `postgresql://ghostbusters:ghostbusters@localhost:15432/ghostbusters`. When it is absent, tests and lightweight development can use the in-memory store. Redis provides short-lived GitHub delivery lookup on `localhost:6379`; PostgreSQL idempotency is the durable fallback.
 
 See `PROJECT_STATUS.md` for the current architecture, complete workflow, implemented features, and remaining limitations.
 
