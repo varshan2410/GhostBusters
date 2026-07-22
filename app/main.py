@@ -5,11 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.models import HealthResponse, HumanReviewRequest, StartRunRequest, WorkflowRun
+from app.models import (
+    CloudHuntRequest, HealthResponse, HumanReviewRequest, ReviewCaseActionRequest,
+    ReviewCase, StartRunRequest, WorkflowRun,
+)
 from app.settings import settings
 from core.run_store import RunNotFoundError
 from core.storage_factory import build_webhook_deduplicator
@@ -19,12 +22,14 @@ from core.workflow_service import (
     list_scenarios,
     workflow_service,
 )
+from core.cloud_hunt_service import CloudHuntConflictError, CloudHuntNotFoundError, cloud_hunt_service
 
 
 app = FastAPI(title="GhostBusters", version="0.1.0")
 static_path = Path(__file__).resolve().parent.parent / settings.static_dir
 webhook_deduplicator = build_webhook_deduplicator()
 app.mount("/static", StaticFiles(directory=static_path), name="static")
+cloud_hunt_service.workflow_service = workflow_service
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -84,7 +89,85 @@ def review_run(run_id: UUID, request: HumanReviewRequest, response: Response) ->
 
 @app.post("/api/reset")
 def reset_runs() -> dict[str, str]:
-    return workflow_service.reset()
+    result = workflow_service.reset()
+    cloud_hunt_service.reset()
+    return result
+
+
+@app.get("/api/cloud/providers")
+def cloud_providers() -> list[dict[str, object]]:
+    return cloud_hunt_service.providers()
+
+
+@app.get("/api/cloud/hunt/fixtures")
+def cloud_hunt_fixtures(provider_scope: str = Query("multi_cloud")) -> list[object]:
+    return cloud_hunt_service.fixtures(provider_scope)
+
+
+@app.post("/api/cloud/hunts")
+def start_cloud_hunt(request: CloudHuntRequest):
+    try:
+        return cloud_hunt_service.start_hunt(request)
+    except CloudHuntConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/cloud/hunts")
+def list_cloud_hunts():
+    return cloud_hunt_service.list_hunts()
+
+
+@app.get("/api/cloud/hunts/{hunt_id}")
+def get_cloud_hunt(hunt_id: UUID):
+    try:
+        return cloud_hunt_service.get_hunt(hunt_id)
+    except CloudHuntNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/reviews", response_model=list[ReviewCase])
+def list_review_cases(
+    source_type: str | None = None,
+    provider: str | None = None,
+    status: str | None = None,
+    required_role: str | None = None,
+    risk: str | None = None,
+) -> list[ReviewCase]:
+    cases = cloud_hunt_service.list_cases()
+    return [case for case in cases if
+            (source_type is None or case.source_type == source_type) and
+            (provider is None or case.provider == provider) and
+            (status is None or case.status == status) and
+            (required_role is None or case.required_reviewer_role == required_role) and
+            (risk is None or case.risk_level == risk)]
+
+
+@app.get("/api/reviews/{review_id}", response_model=ReviewCase)
+def get_review_case(review_id: UUID) -> ReviewCase:
+    try:
+        return cloud_hunt_service.get_case(review_id)
+    except CloudHuntNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/reviews/{review_id}/action", response_model=ReviewCase)
+def act_on_review_case(review_id: UUID, request: ReviewCaseActionRequest) -> ReviewCase:
+    try:
+        return cloud_hunt_service.act_on_case(review_id, request)
+    except CloudHuntNotFoundError:
+        if request.action == "waive":
+            raise HTTPException(status_code=404, detail="Cloud Hunt review case not found.")
+        try:
+            run_request = HumanReviewRequest(
+                action=request.action, reviewer=request.reviewer, comment=request.comment,
+                requested_sources=request.requested_sources, modified_action=request.modified_action, human_context=request.human_context,
+            )
+            workflow_service.review_run(review_id, run_request)
+            return next(case for case in cloud_hunt_service.list_cases() if case.id == review_id)
+        except (StopIteration, WorkflowConflictError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except CloudHuntConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/webhooks/github")

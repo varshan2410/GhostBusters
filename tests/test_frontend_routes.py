@@ -17,18 +17,19 @@ def test_root_serves_agent_console() -> None:
     assert "Technical Audit" in response.text
     assert 'id="simple-view"' in response.text
     assert 'id="technical-view" hidden' in response.text
-    assert "/static/app.js?v=judge-v3" in response.text
-    assert "/static/styles.css?v=judge-v3" in response.text
+    assert "/static/app.js?v=milestone7a" in response.text
+    assert "/static/styles.css?v=milestone7a" in response.text
     assert "Agent recommendation" in response.text
     assert "Human decision" in response.text
     assert "Final workflow outcome" in response.text
+    assert "Planning:" in response.text
 
 
 def test_root_explains_objective_and_entry_modes_accurately() -> None:
     response = client.get("/")
 
     assert "Investigation objective" in response.text
-    assert "still uses explicit FinOps and safety rules" in response.text
+    assert "deterministic planner uses explicit FinOps and safety rules" in response.text
     assert "Demo Mode runs prepared Terraform pull-request examples" in response.text
     assert "GitHub sends a pull-request webhook" in response.text
     assert "Context input" in response.text
@@ -57,4 +58,6 @@ def test_javascript_asset_served() -> None:
     assert "ensureCompatibleDom" in response.text
     assert "Deterministic Python fallback" in response.text
     assert "More human information is required" in response.text
+    assert "Gemini proposed investigation steps" in response.text
+    assert "deterministic planner" in response.text
     assert "[object Object]" not in response.text

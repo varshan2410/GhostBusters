@@ -71,3 +71,18 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS audit_log_run_idx ON audit_log(run_id, sequence_number);
+
+CREATE TABLE IF NOT EXISTS cloud_hunts (
+    id UUID PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL,
+    payload JSONB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cloud_review_cases (
+    id UUID PRIMARY KEY,
+    updated_at TIMESTAMPTZ NOT NULL,
+    payload JSONB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS cloud_review_cases_status_idx
+    ON cloud_review_cases ((payload->>'status'));

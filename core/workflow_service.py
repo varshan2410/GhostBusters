@@ -23,6 +23,7 @@ from app.models import (
     ToolExecutionRecord,
     WorkflowRun,
 )
+from app.settings import Settings, settings
 from core.alternative_generator import generate_alternatives
 from core.audit import append_audit_event
 from core.confidence import calculate_confidence
@@ -93,11 +94,15 @@ class WorkflowService:
         tool_registry: ToolRegistry | None = None,
         policy_evaluator: ConftestPolicyEvaluator | None = None,
         retry_executor: RetryExecutor | None = None,
+        configuration: Settings = settings,
+        ai_client=None,
     ) -> None:
         self.store = store or build_run_store()
         self.tool_registry = tool_registry or default_registry
         self.policy_evaluator = policy_evaluator or default_policy_evaluator
         self.retry_executor = retry_executor or default_retry_executor
+        self.configuration = configuration
+        self.ai_client = ai_client
 
     def start_run(self, request: StartRunRequest) -> tuple[WorkflowRun, bool]:
         if request.idempotency_key:
@@ -141,6 +146,8 @@ class WorkflowService:
                     self.policy_evaluator,
                     current.id,
                     self.retry_executor,
+                    configuration=self.configuration,
+                    ai_client=self.ai_client,
                 )
                 if request.human_context:
                     decision = self._add_context_to_decision(
@@ -422,6 +429,8 @@ class WorkflowService:
                 "policy_result": policy,
                 "final_status": final_status,
                 "final_summary": f"Preferred action is {preferred.action}. Policy status is {policy.status}. Confidence is {confidence.final_confidence:.2f}.",
+                "human_question": None,
+                "termination_reason": "deterministic_re_evaluation_after_human_input",
             },
         )
 
@@ -440,6 +449,7 @@ class WorkflowService:
         return missing
 
     def _copy_decision_audit(self, run: WorkflowRun, decision: DecisionRecord) -> None:
+        self._append_ai_audit(run, decision)
         append_audit_event(run, event_type="investigation_plan_created", actor="agent", summary="Investigation plan created.", details={"selected_tools": decision.investigation_plan.selected_tools})
         for tool in decision.investigation_plan.selected_tools:
             append_audit_event(run, event_type="tool_selected", actor="agent", summary=f"Selected {tool}.")
@@ -450,6 +460,75 @@ class WorkflowService:
         append_audit_event(run, event_type="verifier_completed", actor="agent", summary="Verifier checks completed.")
         self._append_policy_audit(run, decision.policy_result)
         append_audit_event(run, event_type="recommendation_produced", actor="agent", summary=decision.final_summary)
+
+    def _append_ai_audit(self, run: WorkflowRun, decision: DecisionRecord) -> None:
+        if decision.objective_interpretation is None:
+            return
+        mode = decision.planning_mode
+        append_audit_event(
+            run,
+            event_type="ai_planning_started",
+            actor="agent",
+            summary=f"AI planning mode: {mode}.",
+            details={"planning_mode": mode, "model": decision.ai_decisions[0].model if decision.ai_decisions else "deterministic-planner"},
+        )
+        if mode == "gemini_primary":
+            append_audit_event(run, event_type="ai_primary_model_selected", actor="agent", summary="Gemini primary model selected.", details={"planning_mode": mode})
+        elif mode == "gemini_fallback_model":
+            append_audit_event(run, event_type="ai_fallback_model_selected", actor="agent", summary="Gemini fallback model selected.", details={"planning_mode": mode})
+        elif mode == "mock_gemini":
+            append_audit_event(run, event_type="ai_primary_model_selected", actor="agent", summary="Mock Gemini planner selected.", details={"planning_mode": mode, "provider": "mock"})
+        else:
+            append_audit_event(run, event_type="deterministic_planner_fallback", actor="agent", summary="Deterministic planner handled the investigation.", details={"planning_mode": mode, "reason": decision.termination_reason})
+
+        append_audit_event(
+            run,
+            event_type="ai_goal_interpreted",
+            actor="agent",
+            summary=decision.objective_interpretation.plain_language_summary,
+            details={"objective_type": decision.objective_interpretation.objective_type, "normalized_goal": decision.objective_interpretation.normalized_goal, "planning_mode": mode},
+        )
+        for ai_decision in decision.ai_decisions:
+            action = ai_decision.proposed_action
+            details = {
+                "sequence_number": ai_decision.sequence_number,
+                "model": ai_decision.model,
+                "planning_mode": ai_decision.planning_mode,
+                "purpose": ai_decision.purpose,
+                "proposed_action": action.action if action else None,
+                "tool_name": action.tool_name if action else None,
+                "reason": action.reason if action else ai_decision.validation_result,
+                "question_being_answered": action.question_being_answered if action else None,
+                "expected_information": action.expected_information if action else None,
+                "accepted": ai_decision.accepted,
+                "validation_result": ai_decision.validation_result,
+                "fallback_used": ai_decision.fallback_used,
+                "fallback_reason": ai_decision.fallback_reason,
+                "latency_ms": ai_decision.latency_ms,
+                "error_category": ai_decision.error_category,
+            }
+            if ai_decision.purpose == "interpret_evidence":
+                append_audit_event(run, event_type="ai_evidence_interpreted", actor="agent", summary="AI received summarized evidence for next-step planning.", details=details)
+            else:
+                append_audit_event(run, event_type="ai_next_action_proposed", actor="agent", summary="AI proposed the next investigation step.", details=details)
+            append_audit_event(
+                run,
+                event_type="ai_action_validated" if ai_decision.accepted else "ai_action_rejected",
+                actor="agent",
+                summary=ai_decision.validation_result,
+                details=details,
+            )
+            if action and action.action == "call_tool" and ai_decision.accepted:
+                append_audit_event(run, event_type="ai_tool_selected", actor="agent", summary=f"AI selected {action.tool_name} after validation.", details=details)
+            if action and action.action == "request_human_context" and ai_decision.accepted:
+                append_audit_event(run, event_type="ai_human_context_requested", actor="agent", summary=action.human_question or "Human context requested.", details=details)
+        append_audit_event(
+            run,
+            event_type="ai_planning_completed" if mode in {"gemini_primary", "gemini_fallback_model", "mock_gemini"} else "ai_planning_failed",
+            actor="agent",
+            summary=f"Planning completed with mode {mode}.",
+            details={"planning_mode": mode, "termination_reason": decision.termination_reason, "fallback_reason": next((item.fallback_reason for item in decision.ai_decisions if item.fallback_reason), None)},
+        )
 
     def _append_tool_execution_audit(
         self,

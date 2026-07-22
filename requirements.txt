@@ -6,4 +6,5 @@ httpx
 python-dotenv
 psycopg[binary]
 redis
+google-genai
 

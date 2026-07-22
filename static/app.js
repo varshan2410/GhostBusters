@@ -6,6 +6,8 @@ const state = {
   paused: false,
   skipAnimation: false,
   selectedReviewAction: null,
+  hunt: null,
+  reviews: [],
 };
 
 const stageDefinitions = [
@@ -33,6 +35,9 @@ const requiredElementIds = [
   "resilience-summary",
   "review-form",
   "result-view",
+  "planning-badge",
+  "objective-helper",
+  "planning-note",
 ];
 
 function ensureCompatibleDom() {
@@ -156,6 +161,16 @@ function policyEngineLabel(engine) {
   }[engine] || "Not recorded";
 }
 
+function planningModeLabel(mode) {
+  return {
+    gemini_primary: "Gemini-assisted",
+    gemini_fallback_model: "Gemini fallback model",
+    mock_gemini: "Mock Gemini Planner",
+    deterministic_fallback: "Deterministic fallback",
+    deterministic_only: "Deterministic only",
+  }[mode] || "Not recorded";
+}
+
 function runStatusLabel(status) {
   return {
     pending_human_review: "Pending review",
@@ -195,7 +210,29 @@ async function loadInitial() {
     $("api-pill").textContent = "API: Unavailable";
     setMessage("ui-message", error.message);
   }
+  loadReviewQueue();
   renderAll();
+}
+
+async function loadReviewQueue() {
+  try {
+    state.reviews = await api("/api/reviews");
+    renderReviewQueue();
+  } catch (error) {
+    setMessage("cloud-hunt-message", error.message);
+  }
+}
+
+async function startCloudHunt() {
+  try {
+    setMessage("cloud-hunt-message", "Scanning fixture inventory...", true);
+    state.hunt = await api("/api/cloud/hunts", { method: "POST", body: JSON.stringify({ provider_scope: $("cloud-provider-scope").value, inventory_source: "fixtures" }) });
+    await loadReviewQueue();
+    renderCloudHunt();
+    setMessage("cloud-hunt-message", "Cloud Hunt completed. No cloud resource was changed.", true);
+  } catch (error) {
+    setMessage("cloud-hunt-message", error.message);
+  }
 }
 
 function renderScenarioOptions() {
@@ -453,6 +490,24 @@ function renderRecommendation() {
   });
 }
 
+function renderPlanningStatus() {
+  const mode = state.run?.decision_record?.planning_mode || "deterministic_only";
+  $("planning-badge").textContent = `Planning: ${planningModeLabel(mode)}`;
+  if (mode === "gemini_primary" || mode === "gemini_fallback_model") {
+    $("objective-helper").textContent = "This objective is interpreted by Gemini to help plan the investigation. Every proposed action is validated by deterministic safety rules.";
+    $("planning-note").textContent = "Gemini proposed investigation steps. GhostBusters validated each action before execution.";
+  } else if (mode === "mock_gemini") {
+    $("objective-helper").textContent = "This objective is interpreted by the local mock planner for demonstration. Every proposed action is validated by deterministic safety rules.";
+    $("planning-note").textContent = "Mock Gemini proposed investigation steps. GhostBusters validated each action before execution.";
+  } else if (mode === "deterministic_fallback") {
+    $("objective-helper").textContent = "This objective is recorded as business context. The deterministic planner uses explicit FinOps and safety rules.";
+    $("planning-note").textContent = "Gemini was unavailable or disabled. GhostBusters continued using its deterministic planner.";
+  } else {
+    $("objective-helper").textContent = "This objective is recorded as business context. The deterministic planner uses explicit FinOps and safety rules.";
+    $("planning-note").textContent = "Deterministic planning is active; no AI provider handled this run.";
+  }
+}
+
 function allowedReviewActions(status) {
   if (status === "pending_human_review") return ["approve", "modify", "request_evidence", "reject"];
   if (status === "needs_more_evidence") return ["add_context", "request_evidence", "reject"];
@@ -472,7 +527,10 @@ function renderHumanControls() {
     button.hidden = !visible;
     button.disabled = !visible;
   });
-  $("review-guidance").textContent = !state.run
+  const humanQuestion = state.run?.decision_record?.human_question;
+  $("review-guidance").textContent = humanQuestion
+    ? `Agent question: ${humanQuestion}`
+    : !state.run
     ? "Start a run to see the actions permitted by its safety state."
     : status === "blocked"
       ? "This run is blocked. Approval and remediation controls are unavailable."
@@ -480,7 +538,7 @@ function renderHumanControls() {
         ? "The recommendation is not ready for approval. Add context or request missing evidence."
         : status === "pending_human_review"
           ? "Policy permits a human to decide whether a remediation PR should be created."
-          : allowed.length ? "Human input can refine the recorded decision." : "No further review action is available in this state.";
+        : allowed.length ? "Human input can refine the recorded decision." : "No further review action is available in this state.";
   if (state.selectedReviewAction && !allowed.includes(state.selectedReviewAction)) closeReviewForm();
 }
 
@@ -710,21 +768,92 @@ function renderRuntime() {
 }
 
 function renderTechnical() {
-  renderAudit(); renderPlan(); renderTools(); renderTerraform(); renderEvidence(); renderConflicts(); renderAlternatives(); renderVerifier(); renderPolicy(); renderResilience(); renderHistory(); renderImpact(); renderRuntime();
+  renderAudit(); renderAIDecisions(); renderPlan(); renderTools(); renderTerraform(); renderEvidence(); renderConflicts(); renderAlternatives(); renderVerifier(); renderPolicy(); renderResilience(); renderHistory(); renderImpact(); renderRuntime();
+}
+
+function renderAIDecisions() {
+  const node = $("ai-decisions-view"); clear(node);
+  const decisions = state.run?.decision_record?.ai_decisions || [];
+  if (!decisions.length) return node.appendChild(el("p", "muted", "No AI planning decisions recorded."));
+  decisions.forEach((item) => {
+    const action = item.proposed_action;
+    const card = el("article", `info-card ${item.accepted ? "status-completed" : "status-failed"}`);
+    append(card, el("h3", null, `${labelFor(item.purpose)} - ${item.accepted ? "accepted" : "rejected"}`), dataList([
+      ["Model", item.model], ["Planning mode", planningModeLabel(item.planning_mode)], ["Action", action?.action], ["Tool", action?.tool_name], ["Reason", action?.reason], ["Question", action?.question_being_answered], ["Expected information", action?.expected_information], ["Validation", item.validation_result], ["Latency", item.latency_ms === null ? null : `${item.latency_ms} ms`], ["Fallback reason", item.fallback_reason], ["Error category", item.error_category],
+    ]), rawDetails("Usage metadata", item.usage_metadata || {}));
+    node.appendChild(card);
+  });
 }
 
 function renderAll() {
-  renderStatus(); renderStages(); renderRecommendation(); renderEvidenceSummary(); renderHumanControls(); renderResult(); renderTechnical();
+  renderStatus(); renderPlanningStatus(); renderStages(); renderRecommendation(); renderEvidenceSummary(); renderHumanControls(); renderResult(); renderTechnical();
+  renderCloudHunt(); renderReviewQueue();
 }
 
-function switchView(technical) {
-  $("simple-view").hidden = technical;
-  $("technical-view").hidden = !technical;
-  $("simple-view-button").classList.toggle("active", !technical);
-  $("technical-view-button").classList.toggle("active", technical);
-  $("simple-view-button").setAttribute("aria-pressed", String(!technical));
-  $("technical-view-button").setAttribute("aria-pressed", String(technical));
+function switchMode(mode) {
+  ["simple", "cloud-hunt", "review-queue", "technical"].forEach((item) => {
+    const view = item === "simple" ? "simple-view" : `${item}-view`;
+    const button = item === "simple" ? "simple-view-button" : `${item}-view-button`;
+    $(view).hidden = item !== mode;
+    $(button).classList.toggle("active", item === mode);
+    $(button).setAttribute("aria-pressed", String(item === mode));
+  });
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function switchView(technical) { switchMode(technical ? "technical" : "simple"); }
+
+function renderCloudHunt() {
+  const summary = $("cloud-hunt-summary");
+  if (!summary) return;
+  clear(summary);
+  const data = state.hunt?.summary;
+  if (!data) return;
+  [["Resources scanned", data.total_resources], ["Candidates", data.candidates], ["Protected", data.protected_candidates], ["Human context", data.needs_human_context], ["Monthly waste", money(data.estimated_monthly_waste)], ["Annual waste", money(data.estimated_annual_waste)]].forEach(([label, value]) => {
+    const card = el("article", "panel hunt-metric");
+    append(card, el("span", null, label), el("strong", null, value));
+    summary.appendChild(card);
+  });
+  $("candidate-count").textContent = `${data.candidates} candidate${data.candidates === 1 ? "" : "s"}`;
+  const list = $("candidate-list"); clear(list);
+  (state.hunt.candidates || []).forEach((candidate) => {
+    const resource = candidate.resource;
+    const card = el("article", "candidate-card");
+    const supporting = candidate.signals.filter((signal) => signal.supports_ghost_hypothesis).slice(0, 5).map((signal) => signal.description);
+    const protective = candidate.signals.filter((signal) => !signal.supports_ghost_hypothesis).map((signal) => signal.description);
+    append(card, el("p", "kicker", `${labelFor(resource.provider)} | ${labelFor(resource.normalized_resource_type)}`), el("h3", null, resource.resource_name), dataList([["Environment", resource.environment], ["Monthly cost", money(resource.estimated_monthly_cost)], ["Candidate confidence", percentage(candidate.candidate_score)], ["Review state", candidate.exclusion_reason || "Investigation created"]]), el("strong", "candidate-heading", "Why it was flagged"));
+    supporting.forEach((item) => card.appendChild(el("p", "candidate-signal", item)));
+    if (protective.length) { card.appendChild(el("strong", "candidate-heading", "Protection")); protective.forEach((item) => card.appendChild(el("p", "candidate-protection", item))); }
+    list.appendChild(card);
+  });
+  if (!state.hunt.candidates.length) list.appendChild(el("p", "muted", "No suspicious candidates met the configured threshold."));
+}
+
+async function actOnCloudCase(id, action) {
+  try {
+    await api(`/api/reviews/${id}/action`, { method: "POST", body: JSON.stringify({ action, reviewer: "demo-reviewer", comment: action === "reject" ? "Demo review decision" : null }) });
+    await loadReviewQueue();
+  } catch (error) { setMessage("cloud-hunt-message", error.message); }
+}
+
+function renderReviewQueue() {
+  const node = $("review-queue-list");
+  if (!node) return;
+  clear(node);
+  if (!state.reviews.length) return node.appendChild(el("p", "muted", "No review cases loaded."));
+  state.reviews.forEach((item) => {
+    const card = el("article", "queue-card");
+    append(card, el("p", "kicker", `${labelFor(item.source_type)}${item.provider ? ` | ${labelFor(item.provider)}` : ""}`), el("h3", null, item.resource_name), dataList([["Recommendation", item.recommendation], ["Confidence", percentage(item.confidence)], ["Savings", money(item.estimated_monthly_savings) + "/month"], ["Risk", item.risk_level], ["Required reviewer", labelFor(item.required_reviewer_role)], ["State", labelFor(item.status)]]), el("p", "queue-reason", item.recommendation_reason));
+    if (item.source_type === "cloud_hunt" && ["pending", "needs_more_evidence"].includes(item.status)) {
+      const actions = el("div", "queue-actions");
+      if (item.status === "pending") { const approve = el("button", null, "Approve simulated PR"); approve.addEventListener("click", () => actOnCloudCase(item.id, "approve")); actions.appendChild(approve); }
+      const reject = el("button", "danger", "Reject"); reject.addEventListener("click", () => actOnCloudCase(item.id, "reject")); actions.appendChild(reject);
+      card.appendChild(actions);
+    } else if (item.source_type === "terraform_pr") {
+      const open = el("button", "secondary", "Open investigation"); open.addEventListener("click", async () => { state.run = await api(`/api/runs/${item.id}`); startAnimation(true); switchMode("simple"); }); card.appendChild(open);
+    }
+    node.appendChild(card);
+  });
 }
 
 function bindEvents() {
@@ -734,11 +863,15 @@ function bindEvents() {
   $("pause-button").addEventListener("click", () => { state.paused = !state.paused; $("pause-button").textContent = state.paused ? "Resume" : "Pause"; });
   $("skip-animation").addEventListener("change", (event) => { state.skipAnimation = event.target.checked; if (state.run && state.skipAnimation) startAnimation(true); });
   $("simple-view-button").addEventListener("click", () => switchView(false));
+  $("cloud-hunt-view-button").addEventListener("click", () => switchMode("cloud-hunt"));
+  $("review-queue-view-button").addEventListener("click", () => { switchMode("review-queue"); loadReviewQueue(); });
   $("technical-view-button").addEventListener("click", () => switchView(true));
   $("open-technical-button").addEventListener("click", () => switchView(true));
   document.querySelectorAll("[data-review-action]").forEach((button) => button.addEventListener("click", () => selectReviewAction(button.dataset.reviewAction)));
   $("submit-review-button").addEventListener("click", submitSelectedReview);
   $("cancel-review-button").addEventListener("click", closeReviewForm);
+  $("start-cloud-hunt-button").addEventListener("click", startCloudHunt);
+  $("refresh-review-queue-button").addEventListener("click", loadReviewQueue);
   document.querySelectorAll(".audit-section").forEach((section) => {
     section.addEventListener("toggle", () => {
       if (!section.open) return;

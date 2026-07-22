@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GhostBusters Agent Console</title>
-    <link rel="stylesheet" href="/static/styles.css?v=judge-v3" />
+    <link rel="stylesheet" href="/static/styles.css?v=milestone7a" />
   </head>
   <body>
     <header class="topbar">
@@ -25,7 +25,9 @@
     </header>
 
     <nav class="view-switch" aria-label="Presentation level">
-      <button id="simple-view-button" class="view-button active" type="button" aria-pressed="true">Simple View</button>
+      <button id="simple-view-button" class="view-button active" type="button" aria-pressed="true">PR Review <span class="nav-subtitle">(Simple View)</span></button>
+      <button id="cloud-hunt-view-button" class="view-button" type="button" aria-pressed="false">Cloud Hunt</button>
+      <button id="review-queue-view-button" class="view-button" type="button" aria-pressed="false">Review Queue</button>
       <button id="technical-view-button" class="view-button" type="button" aria-pressed="false">Technical Audit</button>
     </nav>
 
@@ -35,6 +37,7 @@
           <div class="section-heading">
             <div>
               <span class="mode-badge">Demo Mode</span>
+              <span class="planning-badge" id="planning-badge">Planning: Deterministic only</span>
               <h2 id="start-title">Start Investigation</h2>
             </div>
             <button id="refresh-button" class="icon-button" type="button" title="Refresh current run" aria-label="Refresh current run">&#8635;</button>
@@ -44,7 +47,7 @@
             <div class="objective-field">
               <label for="goal-input">Investigation objective <span class="context-label">Context input</span></label>
               <textarea id="goal-input" rows="2">Reduce unnecessary cloud cost introduced by this infrastructure change without disrupting active workloads.</textarea>
-              <p class="helper">This describes the business outcome. The current deterministic planner still uses explicit FinOps and safety rules.</p>
+              <p class="helper" id="objective-helper">This objective is recorded as business context. The deterministic planner uses explicit FinOps and safety rules.</p>
             </div>
             <div>
               <label for="scenario-select">Prepared scenario</label>
@@ -57,6 +60,7 @@
           </div>
           <p class="deployment-note">In deployment, the same workflow starts automatically when GitHub sends a pull-request webhook. <span id="trigger-source" class="technical-inline">Trigger source not recorded.</span></p>
           <p class="message" id="ui-message" role="status"></p>
+          <p class="planning-note" id="planning-note"></p>
         </section>
 
         <section class="panel workflow-panel" id="workflow" aria-labelledby="workflow-title">
@@ -155,6 +159,7 @@
           <span class="status-chip light" id="technical-run-id">Run ID: not recorded</span>
         </div>
         <details class="audit-section"><summary>Complete audit trail <span id="audit-count">0 events</span></summary><div id="audit-view"></div></details>
+        <details class="audit-section"><summary>AI planning decisions</summary><div id="ai-decisions-view"></div></details>
         <details class="audit-section"><summary>Investigation plan and questions</summary><div id="plan-view"></div></details>
         <details class="audit-section"><summary>Tool activity</summary><div id="tool-panel" class="technical-grid"></div></details>
         <details class="audit-section"><summary>Terraform change</summary><div id="terraform-view"></div></details>
@@ -168,8 +173,27 @@
         <details class="audit-section"><summary>Business impact</summary><div id="impact-view"></div></details>
         <details class="audit-section"><summary>Runtime architecture</summary><div id="runtime-view"></div></details>
       </section>
+
+      <section id="cloud-hunt-view" class="mode-view" hidden aria-labelledby="cloud-hunt-title">
+        <div class="mode-header panel">
+          <div><p class="kicker">Provider-independent discovery</p><h2 id="cloud-hunt-title">Cloud Hunt Mode</h2><p>Scan controlled AWS, Azure, and Google Cloud fixtures for resources that may be forgotten. No cloud credentials or provider mutations are used.</p></div>
+          <span class="mode-badge">Fixture-backed</span>
+        </div>
+        <section class="panel hunt-start-panel">
+          <div class="hunt-controls"><label for="cloud-provider-scope">Provider scope</label><select id="cloud-provider-scope"><option value="multi_cloud">Multi-cloud</option><option value="aws">AWS</option><option value="azure">Azure</option><option value="gcp">Google Cloud</option></select><button id="start-cloud-hunt-button" type="button">Start Cloud Hunt</button></div>
+          <p class="helper">Goal: Find forgotten cloud resources without disrupting active workloads.</p>
+          <p class="message" id="cloud-hunt-message" role="status"></p>
+        </section>
+        <section class="hunt-summary-grid" id="cloud-hunt-summary"></section>
+        <section class="panel" aria-labelledby="candidate-title"><div class="section-heading"><div><p class="kicker">Investigation leads</p><h2 id="candidate-title">Possible Ghost Resources</h2></div><span class="count-badge" id="candidate-count">0 candidates</span></div><div class="candidate-grid" id="candidate-list"><p class="muted">Start a hunt to scan the fixture inventory.</p></div></section>
+      </section>
+
+      <section id="review-queue-view" class="mode-view" hidden aria-labelledby="review-queue-title">
+        <div class="mode-header panel"><div><p class="kicker">Human control</p><h2 id="review-queue-title">Review Queue</h2><p>Terraform PR reviews and Cloud Hunt cases share one transparent queue. Required reviewer roles are shown before action.</p></div><button id="refresh-review-queue-button" class="secondary" type="button">Refresh Queue</button></div>
+        <section class="panel"><div class="queue-grid" id="review-queue-list"><p class="muted">No review cases loaded.</p></div></section>
+      </section>
     </main>
 
-    <script src="/static/app.js?v=judge-v3" defer></script>
+    <script src="/static/app.js?v=milestone7a" defer></script>
   </body>
 </html>

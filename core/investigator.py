@@ -261,6 +261,14 @@ def _primary_value(evidence: list[EvidenceItem], source: str) -> dict[str, Any] 
     return item.value if item is not None else None
 
 
+def update_question_resolutions(
+    plan: InvestigationPlan,
+    evidence: list[EvidenceItem],
+) -> None:
+    """Public wrapper used when evidence is collected incrementally."""
+    _update_question_resolutions(plan, evidence)
+
+
 def _missing_fields(value: dict[str, Any], fields: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(field for field in fields if value.get(field) is None)
 

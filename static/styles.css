@@ -135,6 +135,28 @@ pre {
 }
 .view-button { min-height: 34px; padding: 0.38rem 1rem; border-color: transparent; background: transparent; color: var(--muted); }
 .view-button.active { border-color: var(--line); background: #fff; color: var(--navy); box-shadow: 0 2px 8px rgba(22,48,66,0.08); }
+.nav-subtitle { color: var(--muted); font-size: 0.86em; }
+.mode-view { display: grid; gap: 0.75rem; }
+.mode-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.mode-header p:not(.kicker) { max-width: 760px; margin: 0.3rem 0 0; color: var(--muted); }
+.hunt-start-panel { padding: 0.8rem 1rem; }
+.hunt-controls { display: grid; grid-template-columns: minmax(180px, 0.35fr) minmax(180px, 0.65fr) auto; gap: 0.65rem; align-items: end; }
+.hunt-controls label { grid-column: 1; grid-row: 1; }
+.hunt-controls select { grid-column: 2; grid-row: 1; }
+.hunt-controls button { grid-column: 3; grid-row: 1; }
+.hunt-summary-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.55rem; }
+.hunt-metric { padding: 0.7rem; }
+.hunt-metric span { display: block; color: var(--muted); font-size: 13px; font-weight: 800; text-transform: uppercase; }
+.hunt-metric strong { display: block; margin-top: 0.25rem; font-size: 1.25rem; }
+.candidate-grid, .queue-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 0.65rem; }
+.candidate-card, .queue-card { min-width: 0; padding: 0.75rem; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfd; }
+.candidate-card h3, .queue-card h3 { font-size: 1.1rem; }
+.candidate-heading { display: block; margin-top: 0.6rem; font-size: 13px; color: var(--navy); text-transform: uppercase; }
+.candidate-signal, .candidate-protection { margin: 0.25rem 0 0; padding-left: 0.75rem; color: var(--muted); font-size: 14px; }
+.candidate-signal { border-left: 3px solid var(--amber); }
+.candidate-protection { border-left: 3px solid var(--cyan); }
+.queue-reason { color: var(--muted); font-size: 14px; }
+.queue-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem; }
 
 .shell { width: min(1240px, calc(100% - 2rem)); margin: 0 auto; padding: 0.8rem 0 2rem; }
 #simple-view { display: grid; gap: 0.75rem; }
@@ -146,6 +168,7 @@ pre {
 
 .start-panel { padding-block: 0.8rem; }
 .mode-badge { margin-bottom: 0.25rem; border-color: #acd9dc; background: #e9f7f7; color: #086873; }
+.planning-badge { display: inline-flex; margin: 0 0.35rem 0.25rem; padding: 0.25rem 0.48rem; border: 1px solid #b7c8e1; border-radius: 999px; background: #eef4fb; color: var(--blue); font-size: 14px; font-weight: 800; }
 .context-label { margin-left: 0.35rem; border-color: #e7ca82; background: var(--amber-soft); color: #714900; vertical-align: middle; }
 .mode-explanation, .deployment-note { margin: 0.25rem 0 0.7rem; color: var(--muted); font-size: 14px; line-height: 1.4; }
 .deployment-note { margin: 0.55rem 0 0; padding-top: 0.5rem; border-top: 1px solid #edf1f4; }
@@ -155,6 +178,7 @@ pre {
 .start-actions button { flex: 1; }
 .icon-button { display: grid; place-items: center; width: 38px; min-height: 38px; padding: 0; border-color: var(--line); background: #f8fafb; color: var(--navy); font-size: 1.35rem; }
 .message { min-height: 1rem; margin: 0.35rem 0 0; color: var(--red); font-size: 14px; font-weight: 650; }
+.planning-note { min-height: 1.1rem; margin: 0.2rem 0 0; color: var(--muted); font-size: 14px; }
 
 .workflow-panel { overflow: hidden; }
 .replay-controls, .toggle { display: flex; align-items: center; gap: 0.5rem; }
@@ -269,7 +293,10 @@ pre {
 }
 
 @media (max-width: 760px) {
-  .topbar, .start-grid, .recommendation-layout, .decision-panel, .result-grid, .technical-columns { grid-template-columns: 1fr; }
+  .topbar, .start-grid, .recommendation-layout, .decision-panel, .result-grid, .technical-columns, .hunt-controls { grid-template-columns: 1fr; }
+  .hunt-controls label, .hunt-controls select, .hunt-controls button { grid-column: auto; grid-row: auto; }
+  .hunt-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mode-header { flex-direction: column; }
   .status-strip { justify-content: flex-start; }
   .shell { width: min(100% - 1rem, 1240px); }
   .stage-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }

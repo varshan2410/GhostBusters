@@ -4,6 +4,53 @@ GhostBusters is a safety-focused FinOps agent for Terraform-driven cost-remediat
 
 This is a hackathon prototype. It does **not** apply real infrastructure changes, merge code, or create real GitHub pull requests.
 
+## Cloud Hunt Mode (Milestone 7A)
+
+Cloud Hunt is the second entry path alongside Terraform PR Review:
+
+```text
+Cloud Hunt inventory scan -> normalized resources -> deterministic ghost candidates
+  -> evidence and protective-signal review -> policy -> human review -> simulated PR
+```
+
+“Cloud Hunt Mode currently uses controlled multi-cloud inventory fixtures. It demonstrates provider-independent discovery, investigation, policy, and human review. Real cloud credentials and mutation APIs are intentionally not required for the competition prototype.”
+
+Run one fixture-backed hunt from PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.run_cloud_hunt --provider multi_cloud
+.\.venv\Scripts\python.exe -m scripts.run_cloud_hunt --provider aws
+```
+
+The provider registry exposes the same read-only adapter contract for AWS, Azure, and Google Cloud. The current adapters load `fixtures/cloud_inventory.json`; they do not call cloud APIs and never mutate resources. Each resource is normalized into `CloudResource`, then deterministic scoring creates `GhostCandidate` records. Low utilization alone is insufficient: age, ownership, activity, dependencies, cost, attachment state, and environment are considered together.
+
+Positive signals include low utilization, old age, missing ownership, completed work, no recent activity, no dependencies, ongoing cost, unattached storage, and idle public IPs. Recent activity, active dependencies, production environment, and other protective signals reduce confidence or block remediation. Production and dependency-protected resources remain visible but cannot be approved for automatic remediation.
+
+Use the dashboard's **Cloud Hunt** mode to start a scan and inspect candidates. **Review Queue** combines Terraform PR and Cloud Hunt cases. Reviewers can approve, reject, request evidence, add context, modify the recommendation, or create a waiver. Waivers suppress the resource until their expiry date and are recorded in the case audit trail. A Cloud Hunt approval creates only a simulated PR record. Unmanaged resources receive an import/Jira/platform-owner proposal and never receive a fabricated Terraform address or patch. Scheduled execution is not enabled automatically; a future scheduler can call the CLI entry point.
+
+Cloud Hunt API endpoints:
+
+```text
+GET  /api/cloud/providers
+GET  /api/cloud/hunt/fixtures
+POST /api/cloud/hunts
+GET  /api/cloud/hunts
+GET  /api/cloud/hunts/{hunt_id}
+GET  /api/reviews
+GET  /api/reviews/{review_id}
+POST /api/reviews/{review_id}/action
+```
+
+Manual scenarios to demonstrate:
+
+- `i-forgotten-test`: strong multi-signal candidate, eligible for simulated review.
+- `i-staging-api`: low utilization with an active dependency; visible but protected.
+- `gce-idle-test`: suspicious signals plus recent Git activity; requests human context.
+- `i-healthy-prod` and `vm-prod-azure`: production resources remain protected.
+- `vol-unattached-demo`, `disk-unattached-demo`, and `ip-unused-demo`: unattached or idle resources are candidates, but unmanaged resources do not receive fabricated Terraform patches.
+
+Real AWS/Azure/GCP credentials, mutations, `terraform apply`, authentication, RBAC, and automatic scheduling are intentionally outside this milestone.
+
 ## Environment setup
 
 ```powershell
@@ -23,6 +70,73 @@ docker compose ps
 ```
 
 The local Docker PostgreSQL endpoint is `localhost:15432`, mapped to container port `5432`. Redis remains available on `localhost:6379`.
+
+## Optional Gemini planning
+
+Milestone 6 adds an optional reasoning layer around the existing deterministic workflow. Gemini may interpret the objective, propose a registered evidence tool, explain the next question, and request human context. GhostBusters validates every proposal before execution. Gemini never parses Terraform, calculates authoritative pricing or savings, computes confidence, runs verifier checks, enforces policy, approves a recommendation, generates a patch, merges a pull request, changes AWS, or runs `terraform apply`.
+
+The default is deterministic-only mode and does not require internet access or an API key:
+
+```dotenv
+AI_ENABLED=false
+AI_PROVIDER=gemini
+AI_DETERMINISTIC_FALLBACK_ENABLED=true
+```
+
+The UI and audit trail record the actual planning mode: `deterministic_only`, `deterministic_fallback`, `gemini_primary`, `gemini_fallback_model`, or `mock_gemini`. Gemini failures, malformed responses, unsafe proposals, unknown tools, and step-limit exhaustion return to the deterministic planner without weakening verifier, policy, or human-review controls.
+
+### Mock Gemini demo
+
+Use the offline provider for a repeatable presentation without a key:
+
+```powershell
+$env:AI_ENABLED="true"
+$env:AI_PROVIDER="mock"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```
+
+The UI labels this `Mock Gemini Planner`; it never claims that a real Gemini request was made.
+
+### Real Gemini mode
+
+Install the official `google-genai` package from `requirements.txt`, then set the key only in the local process environment or ignored `.env` file:
+
+```powershell
+$env:AI_ENABLED="true"
+$env:AI_PROVIDER="gemini"
+$env:GEMINI_API_KEY="<local environment value>"
+$env:GEMINI_MODEL="gemini-3.5-flash"
+$env:GEMINI_FALLBACK_MODEL="gemini-2.5-flash-lite"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```
+
+The primary model is attempted first. When it is unavailable or permission-ineligible, the configured fallback model is attempted. If both fail, the run records `deterministic_fallback`. API keys are read from the environment, never placed in prompts, audit records, serialized runs, or logs.
+
+### Privacy and free-tier limits
+
+Only the objective, a sanitized Terraform resource summary, registered tool descriptions, evidence summaries, unresolved questions, and deterministic safety constraints are eligible for the AI prompt. Hidden chain-of-thought, credentials, database URLs, Redis URLs, webhook secrets, tokens, unrelated audit history, and confidential provider data are not sent.
+
+Do not send confidential company infrastructure or secrets through a free-tier model. Use only controlled demo data unless the organization has approved the provider and data-handling terms.
+
+### AI troubleshooting and verification
+
+Check the actual mode in the Simple View `Planning` badge or the Technical Audit `AI planning decisions` section. Useful controlled checks are:
+
+```powershell
+# Deterministic only
+$env:AI_ENABLED="false"
+
+# Mock mode, no key or network
+$env:AI_ENABLED="true"
+$env:AI_PROVIDER="mock"
+
+# Missing-key fallback
+$env:AI_ENABLED="true"
+$env:AI_PROVIDER="gemini"
+$env:GEMINI_API_KEY=""
+```
+
+Destructive and production fixtures always run the deterministic hard precheck and do not spend AI calls on normal optimization planning. Human context can resume the existing deterministic evaluation, but it cannot override production or destructive blocks, active dependencies, or critical verifier failures.
 
 Start the API from the repository directory:
 

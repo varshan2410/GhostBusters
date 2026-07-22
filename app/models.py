@@ -29,6 +29,38 @@ PolicyStatus = Literal["passed", "blocked", "needs_human_context"]
 PolicyEngine = Literal["python", "conftest", "python_fallback"]
 FinalStatus = Literal["recommendation_ready", "blocked", "abstained", "needs_human_context", "keep"]
 HumanReviewAction = Literal["approve", "reject", "request_evidence", "modify", "add_context"]
+CloudProvider = Literal["aws", "azure", "gcp"]
+CloudProviderScope = Literal["aws", "azure", "gcp", "multi_cloud"]
+CloudHuntTrigger = Literal["manual_cloud_hunt", "scheduled_cloud_hunt"]
+CloudHuntStatus = Literal["created", "scanning", "completed", "failed"]
+NormalizedResourceType = Literal[
+    "virtual_machine", "database", "storage_volume", "load_balancer", "public_ip", "other"
+]
+SuspicionLevel = Literal["low", "medium", "high", "critical"]
+GhostSignalType = Literal[
+    "low_utilization", "old_resource", "missing_owner", "completed_project",
+    "no_recent_activity", "no_dependencies", "unattached_resource", "idle_public_ip",
+    "cost_without_usage", "recent_activity", "active_dependency", "production_resource",
+]
+ReviewCaseSource = Literal["terraform_pr", "cloud_hunt", "manual_demo"]
+ReviewCaseStatus = Literal["pending", "approved", "rejected", "needs_more_evidence", "waived", "pr_created"]
+RequiredReviewerRole = Literal[
+    "application_owner", "finops_reviewer", "platform_engineer", "cloud_owner", "administrator"
+]
+ObjectiveType = Literal[
+    "cost_optimization", "safety_review", "evidence_refresh", "explain_change", "unsupported"
+]
+AgentAction = Literal["call_tool", "request_human_context", "finish_investigation", "abstain"]
+AIPlanningMode = Literal[
+    "gemini_primary",
+    "gemini_fallback_model",
+    "deterministic_fallback",
+    "deterministic_only",
+    "mock_gemini",
+]
+AIDecisionPurpose = Literal[
+    "interpret_goal", "choose_next_tool", "interpret_evidence", "decide_next_step"
+]
 
 
 class RunStatus(StrEnum):
@@ -67,6 +99,44 @@ class TerraformResourceChange(AppModel):
     proposed_instance_type: str | None = None
     destructive: bool
     tags: dict[str, Any] | None = None
+
+
+class ObjectiveInterpretation(AppModel):
+    original_objective: str
+    objective_type: ObjectiveType
+    normalized_goal: str
+    constraints: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    ambiguities: list[str] = Field(default_factory=list)
+    plain_language_summary: str
+
+
+class AgentNextAction(AppModel):
+    action: AgentAction
+    tool_name: str | None = None
+    reason: str
+    question_being_answered: str
+    expected_information: str
+    human_question: str | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class AIDecisionRecord(AppModel):
+    sequence_number: int
+    model: str
+    planning_mode: AIPlanningMode
+    purpose: AIDecisionPurpose
+    input_summary: str
+    proposed_action: AgentNextAction | None = None
+    accepted: bool
+    validation_result: str
+    fallback_used: bool = False
+    fallback_reason: str | None = None
+    latency_ms: int | None = None
+    created_at: datetime
+    usage_metadata: dict[str, Any] = Field(default_factory=dict)
+    error_category: str | None = None
+    error: str | None = None
 
 
 class EvidenceItem(AppModel):
@@ -117,6 +187,21 @@ class ToolExecutionRecord(AppModel):
     external_call: ExternalCallExecutionResult | None = None
 
 
+class AgentLoopState(AppModel):
+    objective_interpretation: ObjectiveInterpretation
+    resource: TerraformResourceChange
+    available_tools: list[str] = Field(default_factory=list)
+    executed_tools: list[str] = Field(default_factory=list)
+    collected_evidence: list[EvidenceItem] = Field(default_factory=list)
+    unresolved_questions: list[str] = Field(default_factory=list)
+    ai_decisions: list[AIDecisionRecord] = Field(default_factory=list)
+    current_step: int = 0
+    maximum_steps: int = 6
+    termination_reason: str | None = None
+    human_context_required: bool = False
+    planning_mode: AIPlanningMode = "deterministic_only"
+
+
 class ResourceEvidence(AppModel):
     resource_id: str
     environment: str | None = None
@@ -156,6 +241,18 @@ class InvestigationPlan(AppModel):
     selected_tools: list[str] = Field(default_factory=list)
     skipped_tools: list[str] = Field(default_factory=list)
     planning_notes: list[str] = Field(default_factory=list)
+
+
+class AIPlannerResult(AppModel):
+    planning_mode: AIPlanningMode
+    objective_interpretation: ObjectiveInterpretation
+    selected_tools: list[str] = Field(default_factory=list)
+    tool_executions: list[ToolExecutionRecord] = Field(default_factory=list)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    ai_decisions: list[AIDecisionRecord] = Field(default_factory=list)
+    unresolved_questions: list[str] = Field(default_factory=list)
+    human_question: str | None = None
+    termination_reason: str
 
 
 class ConflictRecord(AppModel):
@@ -240,6 +337,12 @@ class DecisionRecord(AppModel):
     policy_result: PolicyResult
     final_status: FinalStatus
     final_summary: str
+    planning_mode: AIPlanningMode = "deterministic_only"
+    objective_interpretation: ObjectiveInterpretation | None = None
+    ai_decisions: list[AIDecisionRecord] = Field(default_factory=list)
+    unresolved_questions: list[str] = Field(default_factory=list)
+    human_question: str | None = None
+    termination_reason: str | None = None
 
 
 class StartRunRequest(AppModel):
@@ -314,3 +417,126 @@ class WorkflowRun(AppModel):
     version: int = 1
     idempotency_key: str | None = None
     error: str | None = None
+
+
+class CloudResource(AppModel):
+    provider: CloudProvider
+    account_or_subscription_id: str
+    region_or_location: str
+    resource_id: str
+    resource_name: str
+    provider_resource_type: str
+    normalized_resource_type: NormalizedResourceType
+    status: str
+    environment: str | None = None
+    owner: str | None = None
+    project: str | None = None
+    created_at: datetime | None = None
+    age_days: int | None = None
+    tags: dict[str, str] = Field(default_factory=dict)
+    infrastructure_as_code_managed: bool | None = None
+    terraform_address: str | None = None
+    estimated_monthly_cost: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class GhostSignal(AppModel):
+    signal_type: GhostSignalType
+    description: str
+    value: Any
+    weight: float
+    supports_ghost_hypothesis: bool
+    evidence_source: str
+
+
+class GhostCandidate(AppModel):
+    candidate_id: str
+    resource: CloudResource
+    candidate_score: float = Field(ge=0.0, le=1.0)
+    suspicion_level: SuspicionLevel
+    signals: list[GhostSignal] = Field(default_factory=list)
+    requires_investigation: bool
+    exclusion_reason: str | None = None
+
+
+class CloudHuntSummary(AppModel):
+    total_resources: int = 0
+    healthy_resources: int = 0
+    candidates: int = 0
+    high_confidence_candidates: int = 0
+    protected_candidates: int = 0
+    needs_human_context: int = 0
+    estimated_monthly_waste: float = 0.0
+    estimated_annual_waste: float = 0.0
+    provider_breakdown: dict[str, dict[str, int | float]] = Field(default_factory=dict)
+
+
+class CloudHuntRun(AppModel):
+    id: UUID
+    trigger_source: CloudHuntTrigger
+    provider_scope: CloudProviderScope
+    inventory_source: str = "fixtures"
+    goal: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    status: CloudHuntStatus
+    resources_scanned: int = 0
+    candidates_found: int = 0
+    investigations_created: int = 0
+    protected_resources: int = 0
+    errors: list[str] = Field(default_factory=list)
+    planning_mode: AIPlanningMode = "deterministic_only"
+    audit_events: list[AuditEvent] = Field(default_factory=list)
+    summary: CloudHuntSummary = Field(default_factory=CloudHuntSummary)
+    candidates: list[GhostCandidate] = Field(default_factory=list)
+
+
+class ReviewCase(AppModel):
+    id: UUID
+    source_type: ReviewCaseSource
+    source_reference: str
+    provider: CloudProvider | None = None
+    resource_id: str
+    resource_name: str
+    recommendation: str
+    recommendation_reason: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    risk_level: str
+    estimated_monthly_savings: float = 0.0
+    estimated_annual_savings: float = 0.0
+    policy_status: str
+    required_reviewer_role: RequiredReviewerRole
+    human_decision: str | None = None
+    final_outcome: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    waiver_expiry: datetime | None = None
+    status: ReviewCaseStatus = "pending"
+    candidate: GhostCandidate | None = None
+    terraform_address: str | None = None
+    simulated_pr: MockPullRequest | None = None
+    audit_events: list[AuditEvent] = Field(default_factory=list)
+
+
+class CloudHuntRequest(AppModel):
+    provider_scope: CloudProviderScope = "multi_cloud"
+    inventory_source: str = "fixtures"
+    goal: str = "Find forgotten cloud resources without disrupting active workloads"
+    trigger_source: CloudHuntTrigger = "manual_cloud_hunt"
+
+
+class WaiverRequest(AppModel):
+    reason: str
+    expiry_date: datetime
+    owner: str
+    review_date: datetime | None = None
+
+
+class ReviewCaseActionRequest(AppModel):
+    action: Literal["approve", "reject", "request_evidence", "add_context", "modify", "waive"]
+    reviewer: str = "demo-reviewer"
+    comment: str | None = None
+    requested_sources: list[str] = Field(default_factory=list)
+    modified_action: str | None = None
+    human_context: str | None = None
+    waiver: WaiverRequest | None = None
