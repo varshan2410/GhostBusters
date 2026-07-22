@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.models import HealthResponse, HumanReviewRequest, StartRunRequest, WorkflowRun
 from app.settings import settings
@@ -23,6 +24,7 @@ from core.workflow_service import (
 app = FastAPI(title="GhostBusters", version="0.1.0")
 static_path = Path(__file__).resolve().parent.parent / settings.static_dir
 webhook_deduplicator = build_webhook_deduplicator()
+app.mount("/static", StaticFiles(directory=static_path), name="static")
 
 
 @app.get("/health", response_model=HealthResponse)

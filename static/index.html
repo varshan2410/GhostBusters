@@ -3,13 +3,175 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>GhostBusters</title>
+    <title>GhostBusters Agent Console</title>
+    <link rel="stylesheet" href="/static/styles.css?v=judge-v2" />
   </head>
   <body>
-    <main>
-      <h1>GhostBusters</h1>
-      <p>Autonomous FinOps Agent</p>
-      <p id="api-status">API status placeholder</p>
+    <a class="skip-link" href="#workflow">Skip to live workflow</a>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">GB</span>
+        <div>
+          <h1>GhostBusters</h1>
+          <p>Transparent Autonomous FinOps Agent</p>
+        </div>
+      </div>
+      <p class="product-summary">Reviews Terraform pull requests, gathers evidence, explains its decisions and requires human authorization before remediation.</p>
+      <div class="status-strip" aria-label="Runtime status">
+        <span class="status-chip" id="api-pill">API: checking</span>
+        <span class="status-chip" id="run-pill">Current run: none</span>
+        <span class="status-chip" id="policy-pill">Policy engine: not recorded</span>
+        <span class="status-chip" id="approval-pill">Human approval: waiting</span>
+      </div>
+    </header>
+
+    <nav class="view-switch" aria-label="Presentation level">
+      <button id="simple-view-button" class="view-button active" type="button" aria-pressed="true">Simple View</button>
+      <button id="technical-view-button" class="view-button" type="button" aria-pressed="false">Technical Audit</button>
+    </nav>
+
+    <main class="shell">
+      <div id="simple-view">
+        <section class="panel start-panel" aria-labelledby="start-title">
+          <div class="section-heading">
+            <div>
+              <span class="mode-badge">Demo Mode</span>
+              <h2 id="start-title">Start Investigation</h2>
+            </div>
+            <button id="refresh-button" class="icon-button" type="button" title="Refresh current run" aria-label="Refresh current run">&#8635;</button>
+          </div>
+          <p class="mode-explanation">Demo mode uses prepared Terraform pull-request fixtures to exercise the same investigation, policy and human-review workflow.</p>
+          <div class="start-grid">
+            <div class="objective-field">
+              <label for="goal-input">Investigation objective <span class="context-label">Rule input in current demo</span></label>
+              <textarea id="goal-input" rows="2">Reduce unnecessary cloud cost introduced by this infrastructure change without disrupting active workloads.</textarea>
+              <p class="helper">This objective describes the desired business outcome. The current deterministic planner selects evidence using explicit FinOps and safety rules.</p>
+            </div>
+            <div>
+              <label for="scenario-select">Prepared scenario</label>
+              <select id="scenario-select"></select>
+              <div class="start-actions">
+                <button id="start-button" type="button">Start Investigation</button>
+                <button id="reset-button" type="button" class="secondary">Reset</button>
+              </div>
+            </div>
+          </div>
+          <p class="deployment-note">During the demo, a prepared Terraform PR fixture is used. In deployment, the same workflow starts from a GitHub pull-request webhook.</p>
+          <p class="trigger-note"><strong>Automated PR Mode:</strong> In production, GhostBusters starts automatically when a Terraform pull request is opened or updated. <span id="trigger-source">Trigger source not recorded</span>.</p>
+          <p class="message" id="ui-message" role="status"></p>
+        </section>
+
+        <section class="panel workflow-panel" id="workflow" aria-labelledby="workflow-title">
+          <div class="section-heading">
+            <div>
+              <p class="kicker">Live agent workflow</p>
+              <h2 id="workflow-title">One run, eight transparent stages</h2>
+            </div>
+            <div class="replay-controls">
+              <label class="toggle"><input type="checkbox" id="skip-animation" /> Skip replay</label>
+              <button id="pause-button" class="secondary compact" type="button">Pause</button>
+            </div>
+          </div>
+          <ol class="stage-list" id="stage-list"></ol>
+          <article class="current-action" aria-labelledby="current-action-title">
+            <div><span id="current-action-title">Action</span><strong id="current-action">No run started</strong></div>
+            <div><span>Why</span><strong id="current-reason">Start an investigation to see the recorded workflow.</strong></div>
+            <div><span>Result</span><strong id="current-output">Waiting</strong></div>
+            <div><span>Next</span><strong id="current-next">Choose a prepared scenario</strong></div>
+          </article>
+        </section>
+
+        <section class="recommendation-layout" aria-label="Recommendation and evidence">
+          <article class="panel recommendation-card" aria-labelledby="recommendation-title">
+            <p class="kicker">Recommendation summary</p>
+            <h2 id="recommendation-title">Waiting for investigation</h2>
+            <p class="recommendation-reason" id="recommendation-reason">The recommendation will appear here after evidence and safety checks complete.</p>
+            <div class="metric-row">
+              <div><span>Confidence</span><strong id="recommendation-confidence">--</strong></div>
+              <div><span>Risk</span><strong id="recommendation-risk">--</strong></div>
+              <div><span>Policy</span><strong id="recommendation-policy">--</strong></div>
+              <div><span>Est. savings</span><strong id="recommendation-savings">--</strong></div>
+            </div>
+            <div class="next-action"><span>Next human action</span><strong id="recommendation-next">Start an investigation</strong></div>
+            <div class="important-alternatives" id="important-alternatives"></div>
+          </article>
+          <article class="panel evidence-summary" aria-labelledby="evidence-summary-title">
+            <div class="section-heading">
+              <div>
+                <p class="kicker">Evidence gathered</p>
+                <h2 id="evidence-summary-title">Plain-language signals</h2>
+              </div>
+              <span class="count-badge" id="evidence-count">0 sources</span>
+            </div>
+            <div id="evidence-summary-view" class="evidence-summary-grid"></div>
+            <div id="safety-summary" class="safety-summary">No safety checks recorded yet.</div>
+            <div id="resilience-summary" class="resilience-summary">No external evidence calls recorded yet.</div>
+          </article>
+        </section>
+
+        <section class="panel decision-panel" aria-labelledby="human-title">
+          <div class="decision-copy">
+            <p class="kicker">Human decision</p>
+            <h2 id="human-title">Human authorization</h2>
+            <p id="review-guidance">Start a run to see the actions permitted by its safety state.</p>
+            <p class="safety-callout">Approval creates a remediation pull request only. GhostBusters does not modify AWS directly.</p>
+          </div>
+          <div class="review-control">
+            <label for="reviewer-input">Reviewer</label>
+            <input id="reviewer-input" value="judge" />
+            <div class="review-actions" id="review-actions">
+              <button data-review-action="approve" type="button">Approve</button>
+              <button data-review-action="modify" type="button" class="secondary">Modify Recommendation</button>
+              <button data-review-action="request_evidence" type="button" class="secondary">Request Evidence</button>
+              <button data-review-action="add_context" type="button" class="secondary">Add Context</button>
+              <button data-review-action="reject" type="button" class="danger">Reject</button>
+            </div>
+            <div id="review-form" class="review-form" hidden>
+              <p id="review-form-title"></p>
+              <div id="comment-field"><label for="comment-input">Comment</label><textarea id="comment-input" rows="2" placeholder="Optional review comment"></textarea></div>
+              <div id="sources-field" hidden><label for="requested-sources">Requested sources</label><input id="requested-sources" placeholder="pricing, utilization, jira" /></div>
+              <div id="context-field" hidden><label for="human-context">Business context</label><textarea id="human-context" rows="2" placeholder="Owner note or workload context"></textarea></div>
+              <div id="modify-field" hidden><label for="modified-action">Alternative</label><select id="modified-action"><option value="">Choose action</option><option value="downsize">Downsize</option><option value="schedule">Schedule</option><option value="keep">Keep</option><option value="request_evidence">Request evidence</option><option value="abstain">Abstain</option></select></div>
+              <div class="start-actions"><button id="submit-review-button" type="button">Submit</button><button id="cancel-review-button" class="secondary" type="button">Cancel</button></div>
+            </div>
+            <p class="message" id="review-message" role="status"></p>
+          </div>
+        </section>
+
+        <section class="panel result-panel" aria-labelledby="result-title">
+          <p class="kicker">Result / remediation PR</p>
+          <h2 id="result-title">Waiting for human input</h2>
+          <div id="result-view"><p class="muted">No simulated remediation pull request has been created.</p></div>
+        </section>
+
+        <section class="technical-invite" aria-label="Technical details">
+          <div><strong>Need the full audit record?</strong><span>Inspect every event, tool call, evidence item, policy rule and human action.</span></div>
+          <button id="open-technical-button" type="button" class="secondary">Open Technical Audit</button>
+        </section>
+      </div>
+
+      <section id="technical-view" hidden aria-labelledby="technical-title">
+        <div class="technical-header">
+          <div><p class="kicker">Technical Audit View</p><h2 id="technical-title">Complete recorded run data</h2><p>All backend audit data is preserved in sequence. Sections are collapsed for focused inspection.</p></div>
+          <span class="status-chip light" id="technical-run-id">Run ID: not recorded</span>
+        </div>
+        <details class="audit-section" open><summary>Complete audit trail <span id="audit-count">0 events</span></summary><div id="audit-view"></div></details>
+        <details class="audit-section"><summary>Investigation plan and questions</summary><div id="plan-view"></div></details>
+        <details class="audit-section"><summary>Tool activity</summary><div id="tool-panel" class="technical-grid"></div></details>
+        <details class="audit-section"><summary>Terraform change</summary><div id="terraform-view"></div></details>
+        <details class="audit-section"><summary>Evidence cards</summary><div id="evidence-view" class="technical-grid"></div></details>
+        <details class="audit-section"><summary>Conflicts and missing evidence</summary><div class="technical-columns"><div id="conflicts-view"></div><div id="missing-view"></div></div></details>
+        <details class="audit-section"><summary>Complete alternatives</summary><div id="alternatives-view" class="technical-grid"></div></details>
+        <details class="audit-section"><summary>Verifier checks</summary><div id="verifier-view" class="technical-grid"></div></details>
+        <details class="audit-section"><summary>Policy rules</summary><div id="policy-view"></div></details>
+        <details class="audit-section"><summary>Retries and resilience</summary><div id="resilience-view"></div></details>
+        <details class="audit-section"><summary>Human history</summary><div id="history-view"></div></details>
+        <details class="audit-section"><summary>Business impact</summary><div id="impact-view"></div></details>
+        <details class="audit-section"><summary>Runtime architecture</summary><div id="runtime-view"></div></details>
+      </section>
     </main>
+
+    <script src="/static/app.js?v=judge-v2" defer></script>
   </body>
 </html>
