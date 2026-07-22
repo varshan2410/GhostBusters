@@ -1,6 +1,6 @@
 # Manual Frontend Tests
 
-Run the API, then open `http://127.0.0.1:8000/`.
+Start the API and open `http://127.0.0.1:8000/`.
 
 ```powershell
 docker compose up -d
@@ -8,25 +8,25 @@ Copy-Item .env.example .env
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-## Judge View Checklist
+## Version 2 Judge Checklist
 
-1. **Simple View safe scenario:** confirm Simple View is selected by default, run `safe`, and verify the full story is understandable from grouped stages, recommendation, evidence, human decision, and result.
-2. **Simple View conflicting scenario:** run `conflicting`; confirm the recommendation asks for evidence or context, high-risk conflicts are summarized, and approval is unavailable.
-3. **Simple View blocked scenario:** run `destructive`, then `production`; confirm each shows a blocked result and never offers approval.
-4. **Technical Audit toggle:** switch between Simple View and Technical Audit; confirm the simple content is replaced, not placed beside or underneath it.
-5. **Grouped audit stages:** replay a run and confirm all raw events remain in sequence inside the eight grouped stages and the complete technical audit trail.
-6. **Evidence summaries:** confirm utilization, Jira, Git activity, dependencies, and pricing use plain-language values and conclusions.
-7. **Human actions by state:** verify `pending_human_review` offers Approve, Modify, Request Evidence, and Reject; `needs_more_evidence` offers Add Context, Request Evidence, and Reject; blocked runs never offer approval.
-8. **Safe object rendering:** expand evidence and audit details and confirm no value appears as `[object Object]`.
-9. **Scores and percentages:** confirm confidence uses a whole percentage and technical alternative scores use two decimals such as `0.10`.
-10. **1366x768 projector test:** confirm there is no horizontal overflow, the eight stages are readable, and the human controls do not float over other content.
-11. **Webhook versus demo explanation:** confirm the start panel says demo runs use prepared PR fixtures and production starts from supported GitHub pull-request webhook actions, not every Git push.
-12. **Objective accuracy:** confirm the objective is described as an input to explicit deterministic FinOps and safety rules, not a chatbot or unrestricted planner.
+1. **1366x768 projector:** verify body text, all eight workflow stages, evidence conclusions, controls, and runtime pills are readable with no horizontal overflow.
+2. **Status pills:** verify API, Run, Policy, and Human pills use high-contrast text plus a visible icon/label; technical IDs remain secondary.
+3. **Three-layer outcome:** confirm Agent recommendation, Human decision, and Final workflow outcome are distinct and never contradict one another.
+4. **Rejected workflow:** reject a reviewable run; confirm the recommendation remains visible, Human decision says rejected, Final workflow outcome says the workflow closed, and no controls remain active.
+5. **Pending approval:** run `safe`; confirm Approve, Modify Recommendation, Request Evidence, and Reject are the only actions shown.
+6. **Blocked state:** run `destructive` and `production`; confirm Approve and Modify are absent and the panel explains why remediation is unavailable.
+7. **Needs-more-evidence:** run `conflicting` or `missing_evidence`; confirm Add Context, Request Evidence, and Reject are shown while Approve and Modify are absent.
+8. **Technical Audit:** switch views, confirm all sections start collapsed, and verify opening one accordion closes the previously open accordion.
+9. **Score formatting:** confirm confidence appears like `46%`, scores like `0.10`, monthly savings like `$70/month`, and annual savings like `$840/year`.
+10. **Safe formatting:** inspect nested evidence, policy, and audit data and confirm `[object Object]` never appears.
+11. **Keyboard navigation:** use Tab, Shift+Tab, Enter, and Space to operate view toggles, scenario controls, workflow details, review actions, and audit accordions; confirm focus is always visible.
+12. **Page length:** after a completed run, confirm the key Simple View story fits within approximately two to four desktop viewport heights.
 
-## Action Checks
+## Workflow Checks
 
-- Approve a `safe` run and verify one simulated remediation PR and Terraform diff appear.
-- Submit duplicate approval and confirm the UI displays the backend conflict or unchanged PR without creating another PR.
-- Request missing evidence, add context, modify an eligible recommendation, and reject a reviewable run.
-- Pause, resume, skip replay, refresh the current run, and reset the demo.
-- Open every Technical Audit section and verify plan questions, tools, raw evidence, conflicts, alternatives, verifier findings, policy, resilience, human history, business impact, and runtime fields remain available.
+- Verify the eight stage names and the Waiting, Current, Complete, Needs attention, and Blocked labels.
+- Approve `safe` and confirm the final outcome shows one simulated remediation PR, `$70/month`, `$840/year`, and the Terraform diff.
+- Confirm plain-language policy wording is primary while `needs_human_context` and `python_fallback` appear only as secondary technical values.
+- Expand Technical Audit data and verify raw events remain in sequence and evidence metadata, retries, policy rules, human history, and runtime architecture are preserved.
+- Pause, resume, skip replay, refresh, reset, and verify backend conflict messages remain readable.

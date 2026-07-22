@@ -9,19 +9,19 @@ const state = {
 };
 
 const stageDefinitions = [
-  { id: "goal", title: "Goal received", description: "The business objective is recorded.", matches: ["run_created", "goal_received"] },
-  { id: "terraform", title: "Terraform understood", description: "The proposed infrastructure change is parsed.", matches: ["terraform_parsed"] },
-  { id: "plan", title: "Investigation planned", description: "Relevant evidence sources are selected.", matches: ["investigation_plan_created", "tool_selected"] },
-  { id: "evidence", title: "Evidence collected", description: "Cost, usage and context signals are checked.", prefix: ["tool_", "external_call_", "alternative_evidence_"] },
-  { id: "risk", title: "Risks checked", description: "Conflicts, gaps and safety findings are verified.", matches: ["conflicts_detected", "verifier_completed", "failure_handled_safely"] },
-  { id: "alternatives", title: "Options compared", description: "Eligible alternatives are compared and ranked.", matches: ["alternatives_generated", "recommendation_produced"] },
-  { id: "policy", title: "Policy evaluated", description: "Deterministic safety rules allow or block review.", prefix: ["policy_"] },
-  { id: "human", title: "Human review / execution", description: "A person decides whether a remediation PR may be created.", matches: ["human_review_received", "additional_evidence_requested", "human_context_added", "workflow_resumed", "preferred_action_modified", "mock_pr_created"] },
+  { id: "goal", title: "Goal received", description: "Business objective recorded.", matches: ["run_created", "goal_received"] },
+  { id: "terraform", title: "Terraform understood", description: "Proposed change parsed.", matches: ["terraform_parsed"] },
+  { id: "plan", title: "Investigation planned", description: "Evidence sources selected.", matches: ["investigation_plan_created", "tool_selected"] },
+  { id: "evidence", title: "Evidence collected", description: "Cost, usage and context checked.", prefix: ["tool_", "external_call_", "alternative_evidence_"] },
+  { id: "risk", title: "Risks checked", description: "Conflicts and safety verified.", matches: ["conflicts_detected", "verifier_completed", "failure_handled_safely"] },
+  { id: "alternatives", title: "Options compared", description: "Safe alternatives compared.", matches: ["alternatives_generated", "recommendation_produced"] },
+  { id: "policy", title: "Policy evaluated", description: "Rules allowed or blocked review.", prefix: ["policy_"] },
+  { id: "human", title: "Human review / execution", description: "A person authorizes the PR.", matches: ["human_review_received", "additional_evidence_requested", "human_context_added", "workflow_resumed", "preferred_action_modified", "mock_pr_created"] },
 ];
 
 const toolNames = ["pricing", "utilization", "jira", "git_activity", "dependencies"];
 const $ = (id) => document.getElementById(id);
-const uiVersion = "judge-v2";
+const uiVersion = "judge-v3";
 const requiredElementIds = [
   "api-pill",
   "simple-view",
@@ -129,6 +129,42 @@ function percentage(value) {
   return `${Math.round(Number(value) * 100)}%`;
 }
 
+function recommendationLabel(action) {
+  return {
+    request_evidence: "Request more evidence",
+    downsize: "Downsize the instance",
+    schedule: "Schedule the workload",
+    keep: "Keep the current configuration",
+    abstain: "Do not recommend a change",
+    blocked: "Do not proceed",
+  }[action] || labelFor(action);
+}
+
+function policyStatusLabel(status) {
+  return {
+    needs_human_context: "More human information is required",
+    passed: "Allowed with safety conditions",
+    blocked: "Blocked by safety policy",
+  }[status] || labelFor(status);
+}
+
+function policyEngineLabel(engine) {
+  return {
+    python_fallback: "Deterministic Python fallback",
+    python: "Deterministic Python policy",
+    conftest: "Conftest policy engine",
+  }[engine] || "Not recorded";
+}
+
+function runStatusLabel(status) {
+  return {
+    pending_human_review: "Pending review",
+    needs_more_evidence: "Needs evidence",
+    pr_created: "PR created",
+    failed_safely: "Failed safely",
+  }[status] || labelFor(status || "none");
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -151,12 +187,12 @@ function setMessage(id, message, success = false) {
 async function loadInitial() {
   try {
     const [health, scenarios] = await Promise.all([api("/health"), api("/api/scenarios")]);
-    $("api-pill").textContent = `API: ${health.status}`;
+    $("api-pill").textContent = `API: ${health.status === "ok" ? "Online" : labelFor(health.status)}`;
     state.scenarios = scenarios.scenarios || [];
     renderScenarioOptions();
     setMessage("ui-message", "API ready. Choose a prepared scenario.", true);
   } catch (error) {
-    $("api-pill").textContent = "API: unavailable";
+    $("api-pill").textContent = "API: Unavailable";
     setMessage("ui-message", error.message);
   }
   renderAll();
@@ -263,7 +299,8 @@ function renderStages() {
     if (stage.id === "human" && state.run?.status === "blocked") stageState = "blocked";
     if (stage.id === "human" && ["needs_more_evidence", "abstained"].includes(state.run?.status)) stageState = "warning";
     const item = el("li", `stage ${stageState}`);
-    append(item, el("span", "stage-number", index + 1), el("strong", null, stage.title), el("p", null, stage.description), el("span", "stage-status", stageState));
+    const stageStatusLabel = { pending: "Waiting", active: "Current", complete: "Complete", warning: "Needs attention", blocked: "Blocked" }[stageState];
+    append(item, el("span", "stage-number", index + 1), el("strong", null, stage.title), el("p", null, stage.description), el("span", "stage-status", stageStatusLabel));
     if (events.length) {
       const details = el("details");
       const eventList = el("ol", "stage-events");
@@ -302,7 +339,7 @@ function conciseEventResult(event) {
 function nextStageText(stageId) {
   const index = stageDefinitions.findIndex((stage) => stage.id === stageId);
   if (index >= 0 && index < stageDefinitions.length - 1) return stageDefinitions[index + 1].title;
-  return resultLabel(state.run?.status);
+  return finalOutcome(state.run);
 }
 
 function evidenceItem(source) {
@@ -395,12 +432,13 @@ function nextHumanAction(run) {
 function renderRecommendation() {
   const decision = state.run?.decision_record;
   const preferred = preferredAlternative();
-  $("recommendation-title").textContent = decision ? labelFor(decision.preferred_action) : "Waiting for investigation";
+  $("recommendation-title").textContent = decision ? recommendationLabel(decision.preferred_action) : "Waiting for investigation";
   $("recommendation-reason").textContent = decision ? recommendationReason(decision, preferred) : "The recommendation will appear here after evidence and safety checks complete.";
   $("recommendation-confidence").textContent = percentage(decision?.confidence?.final_confidence);
   $("recommendation-risk").textContent = decision ? riskLevel(decision, preferred) : "--";
-  $("recommendation-policy").textContent = decision ? labelFor(decision.policy_result?.status) : "--";
-  $("recommendation-savings").textContent = preferred ? `${money(preferred.estimated_monthly_savings)}/mo` : "--";
+  $("recommendation-policy").textContent = decision ? policyStatusLabel(decision.policy_result?.status) : "--";
+  $("recommendation-policy-technical").textContent = decision ? `Status: ${decision.policy_result?.status} | Engine ID: ${decision.policy_result?.engine}` : "";
+  $("recommendation-savings").textContent = preferred ? `${money(preferred.estimated_monthly_savings)}/month` : "--";
   $("recommendation-next").textContent = nextHumanAction(state.run);
   const alternativesNode = $("important-alternatives");
   clear(alternativesNode);
@@ -410,7 +448,7 @@ function renderRecommendation() {
     const reason = item.eligible
       ? item.description
       : item.rejection_reasons?.[0] || item.risks?.[0] || "Not eligible under current evidence.";
-    append(note, el("strong", null, `${labelFor(item.action)} - ${item.eligible ? "eligible" : "rejected"}`), el("span", null, reason));
+    append(note, el("strong", null, `${recommendationLabel(item.action)} - ${item.eligible ? "eligible" : "rejected"}`), el("span", null, reason));
     alternativesNode.appendChild(note);
   });
 }
@@ -426,6 +464,9 @@ function allowedReviewActions(status) {
 function renderHumanControls() {
   const status = state.run?.status;
   const allowed = allowedReviewActions(status);
+  const human = humanDecision(state.run);
+  $("human-decision").textContent = human.label;
+  $("human-decision-technical").textContent = human.technical;
   document.querySelectorAll("[data-review-action]").forEach((button) => {
     const visible = allowed.includes(button.dataset.reviewAction);
     button.hidden = !visible;
@@ -441,6 +482,25 @@ function renderHumanControls() {
           ? "Policy permits a human to decide whether a remediation PR should be created."
           : allowed.length ? "Human input can refine the recorded decision." : "No further review action is available in this state.";
   if (state.selectedReviewAction && !allowed.includes(state.selectedReviewAction)) closeReviewForm();
+}
+
+function humanDecision(run) {
+  const latest = run?.human_reviews?.[run.human_reviews.length - 1];
+  if (!latest) {
+    return {
+      label: run?.status === "pending_human_review" ? "Awaiting a reviewer" : "Not made",
+      technical: "No review recorded",
+    };
+  }
+  const reviewer = latest.reviewer || "reviewer";
+  const labels = {
+    approve: `Approved by ${reviewer}`,
+    reject: `Rejected by ${reviewer}`,
+    request_evidence: `More evidence requested by ${reviewer}`,
+    add_context: `Context added by ${reviewer}`,
+    modify: `Recommendation modified by ${reviewer}`,
+  };
+  return { label: labels[latest.action] || labelFor(latest.action), technical: `Review action: ${latest.action}` };
 }
 
 function selectReviewAction(action) {
@@ -476,28 +536,31 @@ async function submitSelectedReview() {
   }
 }
 
-function resultLabel(status) {
+function finalOutcome(run) {
   return {
-    pr_created: "Simulated remediation PR created",
-    rejected: "Recommendation rejected",
-    needs_more_evidence: "More evidence requested",
-    blocked: "Remediation blocked",
-    failed_safely: "Run failed safely",
-  }[status] || "Waiting for human input";
+    pr_created: "Remediation PR created",
+    rejected: "Workflow closed. No PR created.",
+    needs_more_evidence: "Workflow paused for more evidence.",
+    blocked: "Workflow blocked. No PR can be created.",
+    failed_safely: "Workflow stopped safely. No PR created.",
+    pending_human_review: "Awaiting human authorization. No PR created yet.",
+    abstained: "Workflow ended without a remediation recommendation.",
+    keep: "Current infrastructure retained. No PR created.",
+  }[run?.status] || "Waiting for human input";
 }
 
 function renderResult() {
   const node = $("result-view");
   clear(node);
-  $("result-title").textContent = resultLabel(state.run?.status);
+  $("result-title").textContent = finalOutcome(state.run);
   const pr = state.run?.mock_pr;
   if (!pr) {
-    node.appendChild(el("p", "muted", state.run?.status === "rejected" ? "The reviewer rejected this recommendation. No PR was created." : state.run?.status === "blocked" ? "Safety policy prevented approval. No PR was created." : "No simulated remediation pull request has been created."));
+    node.appendChild(el("p", "muted", state.run ? "No PR has been created." : "Start an investigation to see the final workflow outcome."));
     return;
   }
   const layout = el("div", "result-grid");
   const summary = el("div", "pr-summary");
-  [["PR", `#${pr.pr_number}`], ["Action", labelFor(pr.chosen_action)], ["Branch", pr.branch], ["Savings", `${money(pr.monthly_savings)}/mo`], ["From", pr.current_instance_type], ["To", pr.proposed_instance_type]].forEach(([label, value]) => {
+  [["PR", `#${pr.pr_number}`], ["Action", recommendationLabel(pr.chosen_action)], ["Branch", pr.branch], ["Savings", `${money(pr.monthly_savings)}/month | ${money(pr.annual_savings)}/year`], ["From", pr.current_instance_type], ["To", pr.proposed_instance_type]].forEach(([label, value]) => {
     const item = el("div"); append(item, el("span", null, label), el("strong", null, value)); summary.appendChild(item);
   });
   const diff = el("pre"); diff.textContent = pr.terraform_patch_preview || "Not recorded";
@@ -506,9 +569,9 @@ function renderResult() {
 
 function renderStatus() {
   const run = state.run;
-  $("run-pill").textContent = `Current run: ${run ? labelFor(run.status) : "none"}`;
-  $("policy-pill").textContent = `Policy engine: ${run?.decision_record?.policy_result?.engine || "not recorded"}`;
-  $("approval-pill").textContent = `Human approval: ${run ? labelFor(run.status) : "waiting"}`;
+  $("run-pill").textContent = `Run: ${runStatusLabel(run?.status)}`;
+  $("policy-pill").textContent = `Policy: ${policyEngineLabel(run?.decision_record?.policy_result?.engine)}`;
+  $("approval-pill").textContent = `Human: ${humanDecision(run).label}`;
   $("technical-run-id").textContent = `Run ID: ${run?.id || "not recorded"}`;
   $("trigger-source").textContent = "Trigger source not recorded";
 }
@@ -517,7 +580,7 @@ function renderAudit() {
   const node = $("audit-view"); clear(node);
   const events = state.run?.audit_events || [];
   $("audit-count").textContent = `${events.length} events`;
-  if (!events.length) return node.appendChild(el("p", "muted", "No audit events recorded."));
+  if (!events.length) return node.appendChild(el("p", "muted", "No audit events yet."));
   events.forEach((event) => {
     const row = el("div", "audit-row");
     const details = el("details", "raw-details");
@@ -530,7 +593,7 @@ function renderAudit() {
 function renderPlan() {
   const node = $("plan-view"); clear(node);
   const plan = state.run?.decision_record?.investigation_plan;
-  if (!plan) return node.appendChild(el("p", "muted", "Not recorded"));
+  if (!plan) return node.appendChild(el("p", "muted", "No investigation plan yet."));
   append(node, dataList([["Objective", plan.goal], ["Resource", plan.resource_id], ["Selected tools", plan.selected_tools], ["Skipped tools", plan.skipped_tools]]), rawDetails("Planning notes", plan.planning_notes));
   const grid = el("div", "technical-grid");
   (plan.questions || []).forEach((question) => {
@@ -567,7 +630,7 @@ function renderTerraform() {
 function renderEvidence() {
   const node = $("evidence-view"); clear(node);
   const evidence = state.run?.decision_record?.evidence || [];
-  if (!evidence.length) return node.appendChild(el("p", "muted", "Not recorded"));
+  if (!evidence.length) return node.appendChild(el("p", "muted", "No evidence collected yet."));
   evidence.forEach((item) => {
     const card = el("article", `info-card ${statusClass(item.freshness_status)}`);
     append(card, el("h3", null, labelFor(item.source)), dataList([["Claim", item.claim], ["Value", item.value], ["Freshness", item.freshness_status], ["Reliability", item.reliability], ["Resource ID", item.resource_id]]), rawDetails("Metadata", item.metadata || {}));
@@ -580,9 +643,9 @@ function renderConflicts() {
   conflictNode.appendChild(el("h3", null, "Conflicts")); missingNode.appendChild(el("h3", null, "Missing evidence"));
   const conflicts = state.run?.decision_record?.conflicts || [];
   const missing = state.run?.decision_record?.missing_evidence || [];
-  if (!conflicts.length) conflictNode.appendChild(el("p", "muted", "No conflicts recorded."));
+  if (!conflicts.length) conflictNode.appendChild(el("p", "muted", "No conflicts detected."));
   conflicts.forEach((item) => conflictNode.appendChild(append(el("article", `info-card ${statusClass(item.severity)}`), dataList([["Claim", item.claim], ["Sources", item.sources], ["Values", item.values], ["Severity", item.severity], ["Explanation", item.explanation]]))));
-  if (!missing.length) missingNode.appendChild(el("p", "muted", "No missing evidence recorded."));
+  if (!missing.length) missingNode.appendChild(el("p", "muted", "No missing evidence."));
   missing.forEach((item) => missingNode.appendChild(append(el("article", `info-card ${item.critical ? "status-critical" : "status-warning"}`), dataList([["Source", item.source], ["Claim needed", item.claim_needed], ["Critical", item.critical], ["Impact", item.impact]]))));
 }
 
@@ -623,7 +686,7 @@ function renderResilience() {
   const calls = (state.run?.decision_record?.tool_executions || []).filter((item) => item.external_call);
   const incidents = calls.filter((item) => !item.external_call.success || item.external_call.attempts > 1 || item.external_call.retry_exhausted);
   if (calls.length && !incidents.length) node.appendChild(el("p", "muted", "All external evidence calls succeeded on the first attempt."));
-  if (!calls.length) node.appendChild(el("p", "muted", "No external evidence call details recorded."));
+  if (!calls.length) node.appendChild(el("p", "muted", "No retry was needed."));
   incidents.forEach((item) => node.appendChild(append(el("article", `info-card ${statusClass(item.status)}`), el("h3", null, labelFor(item.tool_name)), dataList([["Attempts", item.external_call.attempts], ["Succeeded", item.external_call.success], ["Retries exhausted", item.external_call.retry_exhausted], ["Failure", item.external_call.failure_category], ["Safe message", item.external_call.safe_message]]), rawDetails("Retry events", item.external_call.events))));
 }
 
@@ -631,7 +694,7 @@ function renderHistory() {
   const node = $("history-view"); clear(node);
   const reviews = state.run?.human_reviews || [];
   reviews.forEach((item) => node.appendChild(append(el("article", "info-card"), dataList([["Reviewer", item.reviewer], ["Action", item.action], ["Comment", item.comment], ["Requested sources", item.requested_sources], ["Modified action", item.modified_action], ["Human context", item.human_context], ["Created", item.created_at]]))));
-  if (!reviews.length) node.appendChild(el("p", "muted", "No human interventions recorded."));
+  if (!reviews.length) node.appendChild(el("p", "muted", "No human intervention recorded."));
 }
 
 function renderImpact() {
@@ -676,6 +739,14 @@ function bindEvents() {
   document.querySelectorAll("[data-review-action]").forEach((button) => button.addEventListener("click", () => selectReviewAction(button.dataset.reviewAction)));
   $("submit-review-button").addEventListener("click", submitSelectedReview);
   $("cancel-review-button").addEventListener("click", closeReviewForm);
+  document.querySelectorAll(".audit-section").forEach((section) => {
+    section.addEventListener("toggle", () => {
+      if (!section.open) return;
+      document.querySelectorAll(".audit-section").forEach((other) => {
+        if (other !== section) other.open = false;
+      });
+    });
+  });
 }
 
 if (ensureCompatibleDom()) {

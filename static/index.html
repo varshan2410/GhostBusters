@@ -4,11 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GhostBusters Agent Console</title>
-    <link rel="stylesheet" href="/static/styles.css?v=judge-v2" />
+    <link rel="stylesheet" href="/static/styles.css?v=judge-v3" />
   </head>
   <body>
-    <a class="skip-link" href="#workflow">Skip to live workflow</a>
-
     <header class="topbar">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true">GB</span>
@@ -19,10 +17,10 @@
       </div>
       <p class="product-summary">Reviews Terraform pull requests, gathers evidence, explains its decisions and requires human authorization before remediation.</p>
       <div class="status-strip" aria-label="Runtime status">
-        <span class="status-chip" id="api-pill">API: checking</span>
-        <span class="status-chip" id="run-pill">Current run: none</span>
-        <span class="status-chip" id="policy-pill">Policy engine: not recorded</span>
-        <span class="status-chip" id="approval-pill">Human approval: waiting</span>
+        <span class="status-chip status-api"><span class="status-icon" aria-hidden="true">&#10003;</span><span id="api-pill">API: Checking</span></span>
+        <span class="status-chip status-run"><span class="status-icon" aria-hidden="true">R</span><span id="run-pill">Run: None</span></span>
+        <span class="status-chip status-policy"><span class="status-icon" aria-hidden="true">P</span><span id="policy-pill">Policy: Not recorded</span></span>
+        <span class="status-chip status-human"><span class="status-icon" aria-hidden="true">H</span><span id="approval-pill">Human: Not decided</span></span>
       </div>
     </header>
 
@@ -41,12 +39,12 @@
             </div>
             <button id="refresh-button" class="icon-button" type="button" title="Refresh current run" aria-label="Refresh current run">&#8635;</button>
           </div>
-          <p class="mode-explanation">Demo mode uses prepared Terraform pull-request fixtures to exercise the same investigation, policy and human-review workflow.</p>
+          <p class="mode-explanation">Demo Mode runs prepared Terraform pull-request examples through the real GhostBusters investigation workflow.</p>
           <div class="start-grid">
             <div class="objective-field">
-              <label for="goal-input">Investigation objective <span class="context-label">Rule input in current demo</span></label>
+              <label for="goal-input">Investigation objective <span class="context-label">Context input</span></label>
               <textarea id="goal-input" rows="2">Reduce unnecessary cloud cost introduced by this infrastructure change without disrupting active workloads.</textarea>
-              <p class="helper">This objective describes the desired business outcome. The current deterministic planner selects evidence using explicit FinOps and safety rules.</p>
+              <p class="helper">This describes the business outcome. The current deterministic planner still uses explicit FinOps and safety rules.</p>
             </div>
             <div>
               <label for="scenario-select">Prepared scenario</label>
@@ -57,8 +55,7 @@
               </div>
             </div>
           </div>
-          <p class="deployment-note">During the demo, a prepared Terraform PR fixture is used. In deployment, the same workflow starts from a GitHub pull-request webhook.</p>
-          <p class="trigger-note"><strong>Automated PR Mode:</strong> In production, GhostBusters starts automatically when a Terraform pull request is opened or updated. <span id="trigger-source">Trigger source not recorded</span>.</p>
+          <p class="deployment-note">In deployment, the same workflow starts automatically when GitHub sends a pull-request webhook. <span id="trigger-source" class="technical-inline">Trigger source not recorded.</span></p>
           <p class="message" id="ui-message" role="status"></p>
         </section>
 
@@ -84,13 +81,13 @@
 
         <section class="recommendation-layout" aria-label="Recommendation and evidence">
           <article class="panel recommendation-card" aria-labelledby="recommendation-title">
-            <p class="kicker">Recommendation summary</p>
+            <p class="kicker">Agent recommendation</p>
             <h2 id="recommendation-title">Waiting for investigation</h2>
             <p class="recommendation-reason" id="recommendation-reason">The recommendation will appear here after evidence and safety checks complete.</p>
             <div class="metric-row">
               <div><span>Confidence</span><strong id="recommendation-confidence">--</strong></div>
               <div><span>Risk</span><strong id="recommendation-risk">--</strong></div>
-              <div><span>Policy</span><strong id="recommendation-policy">--</strong></div>
+              <div><span>Policy</span><strong id="recommendation-policy">--</strong><small id="recommendation-policy-technical"></small></div>
               <div><span>Est. savings</span><strong id="recommendation-savings">--</strong></div>
             </div>
             <div class="next-action"><span>Next human action</span><strong id="recommendation-next">Start an investigation</strong></div>
@@ -105,8 +102,8 @@
               <span class="count-badge" id="evidence-count">0 sources</span>
             </div>
             <div id="evidence-summary-view" class="evidence-summary-grid"></div>
-            <div id="safety-summary" class="safety-summary">No safety checks recorded yet.</div>
-            <div id="resilience-summary" class="resilience-summary">No external evidence calls recorded yet.</div>
+            <div id="safety-summary" class="safety-summary">No safety checks yet.</div>
+            <div id="resilience-summary" class="resilience-summary">No retry was needed.</div>
           </article>
         </section>
 
@@ -114,6 +111,7 @@
           <div class="decision-copy">
             <p class="kicker">Human decision</p>
             <h2 id="human-title">Human authorization</h2>
+            <div class="human-outcome"><span>Human decision</span><strong id="human-decision">Not made</strong><small id="human-decision-technical">No review recorded</small></div>
             <p id="review-guidance">Start a run to see the actions permitted by its safety state.</p>
             <p class="safety-callout">Approval creates a remediation pull request only. GhostBusters does not modify AWS directly.</p>
           </div>
@@ -140,9 +138,9 @@
         </section>
 
         <section class="panel result-panel" aria-labelledby="result-title">
-          <p class="kicker">Result / remediation PR</p>
+          <p class="kicker">Final workflow outcome</p>
           <h2 id="result-title">Waiting for human input</h2>
-          <div id="result-view"><p class="muted">No simulated remediation pull request has been created.</p></div>
+          <div id="result-view"><p class="muted">No PR has been created.</p></div>
         </section>
 
         <section class="technical-invite" aria-label="Technical details">
@@ -156,7 +154,7 @@
           <div><p class="kicker">Technical Audit View</p><h2 id="technical-title">Complete recorded run data</h2><p>All backend audit data is preserved in sequence. Sections are collapsed for focused inspection.</p></div>
           <span class="status-chip light" id="technical-run-id">Run ID: not recorded</span>
         </div>
-        <details class="audit-section" open><summary>Complete audit trail <span id="audit-count">0 events</span></summary><div id="audit-view"></div></details>
+        <details class="audit-section"><summary>Complete audit trail <span id="audit-count">0 events</span></summary><div id="audit-view"></div></details>
         <details class="audit-section"><summary>Investigation plan and questions</summary><div id="plan-view"></div></details>
         <details class="audit-section"><summary>Tool activity</summary><div id="tool-panel" class="technical-grid"></div></details>
         <details class="audit-section"><summary>Terraform change</summary><div id="terraform-view"></div></details>
@@ -172,6 +170,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=judge-v2" defer></script>
+    <script src="/static/app.js?v=judge-v3" defer></script>
   </body>
 </html>

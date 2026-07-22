@@ -17,18 +17,21 @@ def test_root_serves_agent_console() -> None:
     assert "Technical Audit" in response.text
     assert 'id="simple-view"' in response.text
     assert 'id="technical-view" hidden' in response.text
-    assert "/static/app.js?v=judge-v2" in response.text
-    assert "/static/styles.css?v=judge-v2" in response.text
+    assert "/static/app.js?v=judge-v3" in response.text
+    assert "/static/styles.css?v=judge-v3" in response.text
+    assert "Agent recommendation" in response.text
+    assert "Human decision" in response.text
+    assert "Final workflow outcome" in response.text
 
 
 def test_root_explains_objective_and_entry_modes_accurately() -> None:
     response = client.get("/")
 
     assert "Investigation objective" in response.text
-    assert "explicit FinOps and safety rules" in response.text
-    assert "Demo mode uses prepared Terraform pull-request fixtures" in response.text
-    assert "GitHub pull-request webhook" in response.text
-    assert "pull request is opened or updated" in response.text
+    assert "still uses explicit FinOps and safety rules" in response.text
+    assert "Demo Mode runs prepared Terraform pull-request examples" in response.text
+    assert "GitHub sends a pull-request webhook" in response.text
+    assert "Context input" in response.text
     assert "High-level goal" not in response.text
     assert "chatbot" not in response.text.lower()
 
@@ -52,4 +55,6 @@ def test_javascript_asset_served() -> None:
     assert "stageDefinitions" in response.text
     assert "safeObject" in response.text
     assert "ensureCompatibleDom" in response.text
+    assert "Deterministic Python fallback" in response.text
+    assert "More human information is required" in response.text
     assert "[object Object]" not in response.text
