@@ -545,6 +545,11 @@ class ReviewCase(AppModel):
     id: UUID
     source_type: ReviewCaseSource
     source_reference: str
+    repository: str | None = None
+    pull_request_number: int | None = None
+    head_branch: str | None = None
+    base_branch: str | None = None
+    commit_sha: str | None = None
     provider: CloudProvider | None = None
     resource_id: str
     resource_name: str
@@ -562,7 +567,7 @@ class ReviewCase(AppModel):
     updated_at: datetime
     waiver_expiry: datetime | None = None
     status: ReviewCaseStatus = "pending"
-    candidate: GhostCandidate | None = None
+    candidate: GhostCandidate | GitHubTerraformResourceChange | None = None
     terraform_address: str | None = None
     simulated_pr: MockPullRequest | None = None
     audit_events: list[AuditEvent] = Field(default_factory=list)

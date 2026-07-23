@@ -117,6 +117,7 @@ function rawDetails(label, value) {
 }
 
 function labelFor(value) {
+  if (value === "terraform_pr") return "TERRAFORM PR";
   return String(value || "Not recorded").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 

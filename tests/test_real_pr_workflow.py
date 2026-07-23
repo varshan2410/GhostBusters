@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.models import GitHubTerraformChange, GitHubTerraformResourceChange, HumanReviewRequest
+from app.models import (
+    GitHubTerraformChange,
+    GitHubTerraformResourceChange,
+    HumanReviewRequest,
+    StartRunRequest,
+)
 from app.settings import Settings
 from core.cloud_hunt_service import CloudHuntService
 from core.run_store import InMemoryRunStore
@@ -23,11 +28,61 @@ def test_github_investigation_review_queue_and_simulated_fallback() -> None:
     assert created is True
     assert run.status == "pending_human_review"
     assert run.source_type == "terraform_pr"
-    queue = CloudHuntService(workflow_service=service).list_cases()
-    assert any(case.source_reference.endswith("/pull/42") for case in queue)
+    cloud_hunt = CloudHuntService(workflow_service=service)
+    review = next(case for case in cloud_hunt.list_cases() if case.id == run.id)
+    assert review.source_type == "terraform_pr"
+    assert review.source_reference.endswith("/pull/42")
+    assert review.repository == "demo/infra"
+    assert review.pull_request_number == 42
+    assert review.head_branch == "resize"
+    assert review.base_branch == "main"
+    assert review.commit_sha == "head"
+    assert review.terraform_address == "aws_instance.app"
+    assert isinstance(review.candidate, GitHubTerraformResourceChange)
     approved, _ = service.review_run(run.id, HumanReviewRequest(action="approve", reviewer="judge"))
     assert approved.mock_pr is not None
     assert approved.real_pr is None
+    approved_review = next(case for case in cloud_hunt.list_cases() if case.id == run.id)
+    assert approved_review.simulated_pr is not None
+    assert approved_review.simulated_pr.pr_number == approved.mock_pr.pr_number
+
+
+def test_manual_demo_review_remains_manual_demo() -> None:
+    service = WorkflowService(InMemoryRunStore(), configuration=Settings(ai_enabled=False))
+    run, created = service.start_run(
+        StartRunRequest(goal="Review the demo safely.", scenario_name="safe")
+    )
+    assert created is True
+    review = next(case for case in CloudHuntService(workflow_service=service).list_cases() if case.id == run.id)
+    assert run.source_type == "manual_demo"
+    assert review.source_type == "manual_demo"
+    assert review.source_reference == str(run.id)
+    assert review.repository is None
+    assert review.candidate is None
+    assert review.terraform_address is None
+
+
+def test_authenticated_redelivery_reclassifies_legacy_run_without_duplication() -> None:
+    service = WorkflowService(InMemoryRunStore(), configuration=Settings(ai_enabled=False))
+    legacy, created = service.start_run(
+        StartRunRequest(
+            goal="Analyze a Terraform pull request for safe FinOps remediation.",
+            scenario_name="safe",
+            idempotency_key="legacy-delivery-42",
+        )
+    )
+    repaired, duplicate_created = service.start_github_run(
+        source(), "legacy-delivery-42"
+    )
+    assert created is True
+    assert duplicate_created is False
+    assert repaired.id == legacy.id
+    assert repaired.source_type == "terraform_pr"
+    assert repaired.github_source is not None
+    assert len(service.list_runs()) == 1
+    review = CloudHuntService(workflow_service=service).get_case(repaired.id)
+    assert review.source_type == "terraform_pr"
+    assert review.terraform_address == "aws_instance.app"
 
 
 def test_destructive_and_production_github_changes_are_blocked_before_normal_approval() -> None:

@@ -121,9 +121,26 @@ class CloudHuntService:
             for run in self.workflow_service.list_runs():
                 if run.decision_record is None:
                     continue
+                github_source = run.github_source
+                terraform_change = None
+                if github_source is not None:
+                    terraform_change = next(
+                        (
+                            change
+                            for change in github_source.resource_changes
+                            if change.address == run.decision_record.resource_id
+                        ),
+                        github_source.resource_changes[0] if github_source.resource_changes else None,
+                    )
                 cases.append(ReviewCase(
-                    id=run.id, source_type=run.source_type, source_reference=run.github_source.pull_request_url if run.github_source else str(run.id),
-                    provider=run.github_source.provider if run.github_source and run.github_source.provider in {"aws", "azure", "gcp"} else None,
+                    id=run.id, source_type=run.source_type,
+                    source_reference=github_source.pull_request_url if github_source else str(run.id),
+                    repository=github_source.repository if github_source else None,
+                    pull_request_number=github_source.pull_request_number if github_source else None,
+                    head_branch=github_source.head_branch if github_source else None,
+                    base_branch=github_source.base_branch if github_source else None,
+                    commit_sha=github_source.head_sha if github_source else None,
+                    provider=github_source.provider if github_source and github_source.provider in {"aws", "azure", "gcp"} else None,
                     resource_id=run.decision_record.resource_id, resource_name=run.decision_record.resource_id,
                     recommendation=run.decision_record.preferred_action,
                     recommendation_reason=run.decision_record.final_summary,
@@ -135,6 +152,9 @@ class CloudHuntService:
                     required_reviewer_role="platform_engineer", human_decision=run.human_reviews[-1].action if run.human_reviews else None,
                     final_outcome=run.status.value, created_at=run.created_at, updated_at=run.updated_at,
                     status="pr_created" if run.mock_pr or run.real_pr else "pending",
+                    candidate=terraform_change,
+                    terraform_address=terraform_change.address if terraform_change else None,
+                    simulated_pr=run.mock_pr,
                 ))
         return cases
 
@@ -221,7 +241,7 @@ class CloudHuntService:
         )
 
     def _simulated_pr(self, case: ReviewCase, reviewer: str) -> MockPullRequest:
-        resource = case.candidate.resource if case.candidate else None
+        resource = case.candidate.resource if isinstance(case.candidate, GhostCandidate) else None
         managed = bool(resource and resource.infrastructure_as_code_managed and resource.terraform_address)
         patch = "Resource is not currently managed by Terraform. Proposal: import into Terraform or create a Jira remediation task." if not managed else f"# Simulated Cloud Hunt proposal\n# {case.recommendation} {resource.terraform_address}\n# No provider mutation was performed."
         return MockPullRequest(
@@ -230,13 +250,17 @@ class CloudHuntService:
             created_at=_now(), status="open", resource_id=case.resource_id, chosen_action=case.recommendation,
             current_instance_type=None, proposed_instance_type=None, terraform_patch_preview=patch,
             monthly_savings=case.estimated_monthly_savings, annual_savings=case.estimated_annual_savings,
-            confidence=case.confidence, policy_summary=case.policy_status, evidence_summary=[signal.description for signal in (case.candidate.signals if case.candidate else [])],
+            confidence=case.confidence, policy_summary=case.policy_status,
+            evidence_summary=[
+                signal.description
+                for signal in (case.candidate.signals if isinstance(case.candidate, GhostCandidate) else [])
+            ],
             human_approval_summary=f"Approved by {reviewer}: simulated only.",
         )
 
     @staticmethod
-    def _is_protected(candidate: GhostCandidate | None) -> bool:
-        if candidate is None:
+    def _is_protected(candidate: GhostCandidate | object | None) -> bool:
+        if not isinstance(candidate, GhostCandidate):
             return False
         return any(signal.signal_type in {"active_dependency", "production_resource", "recent_activity"} for signal in candidate.signals)
 

@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.main import app
+from app.settings import Settings
 from core.webhook_dedup import NoopWebhookDeduplicator
 
 
@@ -51,7 +52,8 @@ def test_workflow_api_invalid_states_and_missing_resources() -> None:
     assert missing.status_code == 404
 
 
-def test_workflow_api_request_context_modify_reject_and_webhook() -> None:
+def test_workflow_api_request_context_modify_reject_and_webhook(monkeypatch) -> None:
+    monkeypatch.setattr(main_module, "settings", Settings(github_integration_enabled=False))
     evidence_needed = client.post(
         "/api/runs",
         json={"goal": "need evidence", "scenario_name": "missing_evidence"},
@@ -100,7 +102,8 @@ def test_workflow_api_request_context_modify_reject_and_webhook() -> None:
     assert webhook.json()["run"]["id"] == duplicate.json()["run"]["id"]
 
 
-def test_workflow_api_webhook_unsupported_and_missing_delivery() -> None:
+def test_workflow_api_webhook_unsupported_and_missing_delivery(monkeypatch) -> None:
+    monkeypatch.setattr(main_module, "settings", Settings(github_integration_enabled=False))
     unsupported_event = client.post(
         "/webhooks/github",
         headers={"X-GitHub-Event": "push", "X-GitHub-Delivery": "delivery-2"},

@@ -196,14 +196,30 @@ async def github_webhook(
     action = payload.get("action")
     if action not in {"opened", "reopened", "synchronize"}:
         return {"status": "ignored", "reason": f"Unsupported pull_request action: {action}"}
+    repository_delivery = bool(payload.get("repository") or payload.get("pull_request"))
     cached_run_id = webhook_deduplicator.get_run_id(x_github_delivery)
     if cached_run_id is not None:
         try:
-            return {"status": "duplicate", "run": workflow_service.get_run(cached_run_id)}
+            cached_run = workflow_service.get_run(cached_run_id)
+            cached_legacy_github_run = (
+                settings.github_integration_enabled
+                and repository_delivery
+                and cached_run.source_type == "manual_demo"
+                and cached_run.github_source is None
+            )
+            if not cached_legacy_github_run:
+                return {"status": "duplicate", "run": cached_run}
         except RunNotFoundError:
             pass
     durable = workflow_service.find_run_by_idempotency(x_github_delivery)
-    if durable is not None:
+    legacy_github_run = (
+        durable is not None
+        and settings.github_integration_enabled
+        and durable.source_type == "manual_demo"
+        and durable.github_source is None
+        and repository_delivery
+    )
+    if durable is not None and not legacy_github_run:
         return {"status": "duplicate", "run": durable}
     if settings.github_integration_enabled:
         repository = str((payload.get("repository") or {}).get("full_name") or "")
@@ -228,6 +244,11 @@ async def github_webhook(
         webhook_deduplicator.remember(x_github_delivery, run.id)
         response.status_code = 201 if created else 200
         return {"status": "created" if created else "duplicate", "run": run}
+    if repository_delivery:
+        raise HTTPException(
+            status_code=503,
+            detail="GitHub integration is disabled. Enable it and restart the API before delivering repository webhooks.",
+        )
     goal = payload.get("goal") or "Analyze Terraform pull request for safe FinOps remediation."
     scenario_name = payload.get("scenario_name") or "safe"
     try:

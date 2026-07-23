@@ -181,22 +181,33 @@ class WorkflowService:
 
     def start_github_run(self, source: GitHubTerraformChange, delivery_id: str, goal: str | None = None) -> tuple[WorkflowRun, bool]:
         existing = self.store.find_by_idempotency_key(delivery_id)
-        if existing is not None:
+        if existing is not None and (
+            existing.source_type != "manual_demo" or existing.github_source is not None
+        ):
             return existing, False
         scenario = load_scenario("safe")
         now = utc_now()
         run = WorkflowRun(
-            id=uuid4(), goal=goal or "Analyze a GitHub Terraform pull request for safe FinOps remediation.",
-            scenario_name="safe", status=RunStatus.created, created_at=now, updated_at=now,
+            id=existing.id if existing else uuid4(),
+            goal=goal or "Analyze a GitHub Terraform pull request for safe FinOps remediation.",
+            scenario_name="safe", status=RunStatus.created,
+            created_at=existing.created_at if existing else now, updated_at=now,
             idempotency_key=delivery_id, source_type="terraform_pr", github_source=source,
         )
+        if existing is not None:
+            append_audit_event(
+                run,
+                event_type="github_legacy_run_reclassified",
+                actor="system",
+                summary="Reclassified a legacy webhook run after authenticated redelivery.",
+            )
         append_audit_event(run, event_type="github_webhook_received", actor="system", summary="Validated GitHub pull-request webhook received.", details={"repository": source.repository, "pull_request": source.pull_request_number})
         append_audit_event(run, event_type="github_signature_validated", actor="system", summary="Webhook HMAC SHA-256 signature validated.", details={"repository": source.repository})
         append_audit_event(run, event_type="github_repository_allowed", actor="system", summary="Repository matched the explicit allowlist.", details={"repository": source.repository})
         append_audit_event(run, event_type="github_pr_loaded", actor="tool", summary="GitHub pull-request metadata loaded.", details={"repository": source.repository, "pull_request": source.pull_request_number, "head_sha": source.head_sha})
         append_audit_event(run, event_type="github_pr_files_loaded", actor="tool", summary="Changed files loaded from GitHub.", details={"files": source.changed_files})
         append_audit_event(run, event_type="terraform_files_selected", actor="agent", summary=f"Selected {len(source.terraform_files)} Terraform file(s).", details={"selected": source.terraform_files, "skipped": source.unsupported_changes})
-        run = self.store.create(run)
+        run = self.store.update(existing.id, run) if existing is not None else self.store.create(run)
 
         def execute(current: WorkflowRun) -> WorkflowRun:
             if not source.resource_changes:
@@ -225,7 +236,7 @@ class WorkflowService:
                 append_audit_event(current, event_type="github_integration_failed", actor="system", summary="GitHub investigation failed safely.")
             current.updated_at = utc_now()
             return current
-        return self.store.update(run.id, execute), True
+        return self.store.update(run.id, execute), existing is None
 
     def get_run(self, run_id: UUID) -> WorkflowRun:
         return self.store.get(run_id)
