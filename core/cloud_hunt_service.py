@@ -122,7 +122,8 @@ class CloudHuntService:
                 if run.decision_record is None:
                     continue
                 cases.append(ReviewCase(
-                    id=run.id, source_type="terraform_pr", source_reference=str(run.id),
+                    id=run.id, source_type=run.source_type, source_reference=run.github_source.pull_request_url if run.github_source else str(run.id),
+                    provider=run.github_source.provider if run.github_source and run.github_source.provider in {"aws", "azure", "gcp"} else None,
                     resource_id=run.decision_record.resource_id, resource_name=run.decision_record.resource_id,
                     recommendation=run.decision_record.preferred_action,
                     recommendation_reason=run.decision_record.final_summary,
@@ -133,7 +134,7 @@ class CloudHuntService:
                     policy_status=run.decision_record.policy_result.status,
                     required_reviewer_role="platform_engineer", human_decision=run.human_reviews[-1].action if run.human_reviews else None,
                     final_outcome=run.status.value, created_at=run.created_at, updated_at=run.updated_at,
-                    status="pr_created" if run.mock_pr else "pending",
+                    status="pr_created" if run.mock_pr or run.real_pr else "pending",
                 ))
         return cases
 

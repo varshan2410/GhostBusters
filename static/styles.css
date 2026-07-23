@@ -172,6 +172,12 @@ pre {
 .context-label { margin-left: 0.35rem; border-color: #e7ca82; background: var(--amber-soft); color: #714900; vertical-align: middle; }
 .mode-explanation, .deployment-note { margin: 0.25rem 0 0.7rem; color: var(--muted); font-size: 14px; line-height: 1.4; }
 .deployment-note { margin: 0.55rem 0 0; padding-top: 0.5rem; border-top: 1px solid #edf1f4; }
+.source-card { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin-top: 0.55rem; border: 1px solid var(--line); background: var(--line); }
+.source-card div { min-width: 0; padding: 0.5rem; background: #f8fafb; }
+.source-card span, .source-card strong { display: block; }
+.source-card span { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+.source-card strong { margin-top: 0.15rem; font-size: 14px; overflow-wrap: anywhere; }
+.github-link { display: inline-block; margin-top: 0.5rem; color: var(--blue); font-weight: 800; }
 .technical-inline { font-size: 13px; color: #7a8790; }
 .start-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(250px, 0.8fr); gap: 1rem; align-items: end; }
 .start-actions { display: flex; gap: 0.45rem; margin-top: 0.55rem; }
@@ -296,6 +302,7 @@ pre {
   .topbar, .start-grid, .recommendation-layout, .decision-panel, .result-grid, .technical-columns, .hunt-controls { grid-template-columns: 1fr; }
   .hunt-controls label, .hunt-controls select, .hunt-controls button { grid-column: auto; grid-row: auto; }
   .hunt-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .source-card { grid-template-columns: 1fr; }
   .mode-header { flex-direction: column; }
   .status-strip { justify-content: flex-start; }
   .shell { width: min(100% - 1rem, 1240px); }

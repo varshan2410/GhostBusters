@@ -51,6 +51,62 @@ Manual scenarios to demonstrate:
 
 Real AWS/Azure/GCP credentials, mutations, `terraform apply`, authentication, RBAC, and automatic scheduling are intentionally outside this milestone.
 
+## Real GitHub Terraform intake (Milestone 7B)
+
+Real GitHub integration is opt-in and restricted to an explicit controlled demo repository. Use a dedicated repository such as `your-account/ghostbusters-demo-infrastructure`; do not allowlist the GhostBusters source repository, production repositories, third-party repositories, or repositories containing secrets.
+
+The supported flow is:
+
+```text
+GitHub pull_request webhook -> HMAC verification -> repository allowlist
+  -> PR metadata and changed-file reads -> safe GitHub diff parsing
+  -> existing investigation, verifier, policy, and human review
+  -> simulated PR by default, or guarded real remediation PR when explicitly enabled
+```
+
+Create a fine-grained GitHub token scoped only to the demo repository. Required repository permissions are **Contents: Read and write** and **Pull requests: Read and write**. No administration, workflow, secrets, organization, or cloud permissions are required. Store the token and webhook secret only in the ignored local `.env`:
+
+```dotenv
+GITHUB_INTEGRATION_ENABLED=true
+GITHUB_TOKEN=<fine-grained token>
+GITHUB_WEBHOOK_SECRET=<long random webhook secret>
+GITHUB_ALLOWED_REPOSITORIES=your-account/ghostbusters-demo-infrastructure
+GITHUB_DEMO_REPOSITORY=your-account/ghostbusters-demo-infrastructure
+GITHUB_CREATE_REAL_PR=false
+```
+
+Restart the API after changing `.env`. Configure the demo repository webhook to send **Pull requests** to `https://<public-demo-host>/webhooks/github`, set content type to `application/json`, and use the identical webhook secret. Supported actions are `opened`, `reopened`, and `synchronize`. Invalid signatures return `401`; repositories outside the allowlist return `403`. Delivery IDs are deduplicated through Redis when available and through the durable workflow idempotency key.
+
+The default analysis mode is `github_diff`. It reads only changed `.tf` and `.tf.json` files at the authoritative PR head SHA, rejects traversal paths, and recognizes simple `instance_type`, `machine_type`, and `size` changes. Delete, replacement, and production signals are hard-blocked before optional Gemini planning. Terraform CLI is disabled by default. Its optional wrapper permits only `version`, `fmt -check`, `validate`, and `show -json` for an already supplied plan; it never permits `init`, `plan`, `apply`, or `destroy`.
+
+Real remediation remains separately disabled. First demonstrate the safe simulated fallback. Enable real PR creation only for the controlled repository:
+
+```dotenv
+GITHUB_CREATE_REAL_PR=true
+```
+
+After valid human approval, GhostBusters re-fetches the analysed file at the immutable head SHA, confirms the expected old value exists exactly once, changes one supported attribute, creates a `ghostbusters/remediation/...` branch, commits only that file, and opens a PR against the recorded base branch. It never pushes to `main`, merges, runs Terraform, or changes cloud infrastructure. If validation fails, it records a safe failure and performs no write. Duplicate approval returns the stored PR; an existing open GhostBusters branch PR is reused when found.
+
+Manual demo:
+
+1. In the controlled repository, create a branch changing `instance_type = "m5.large"` to `instance_type = "m5.xlarge"` in a staging resource.
+2. Open a pull request and confirm GitHub delivers the signed webhook.
+3. Open the GhostBusters **PR Review** and **Review Queue** views.
+4. Inspect repository, PR, author, branches, commit SHA, Terraform files, evidence, policy, and required review.
+5. Approve the recommendation.
+6. With real PR creation enabled, open the returned GitHub URL and inspect the dedicated remediation branch.
+7. Explain: “No cloud resource was modified. The normal company Git and CI/CD process still controls deployment.”
+
+Local fixture backup and offline verification remain available:
+
+```powershell
+$env:GITHUB_INTEGRATION_ENABLED="false"
+$env:GITHUB_CREATE_REAL_PR="false"
+.\.venv\Scripts\python.exe -m pytest tests\test_github_webhook.py tests\test_real_pr_workflow.py
+```
+
+To clean up a demo, close the generated remediation PR and delete only its `ghostbusters/remediation/...` branch in the controlled repository. Revoke the fine-grained token and rotate the webhook secret after the event. Real GitHub tests use mocked HTTP and require no internet, token, repository, or Terraform provider download.
+
 ## Environment setup
 
 ```powershell

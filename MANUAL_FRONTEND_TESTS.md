@@ -1,5 +1,14 @@
 # Manual Frontend Tests
 
+## GitHub Pull Request Source
+
+1. Start a fixture run and confirm the Source card says **Fixture / Demo**.
+2. Deliver a signed webhook from the allowlisted demo repository.
+3. Open the resulting run and confirm repository, PR number/title, author, branches, head SHA, and Terraform files are shown.
+4. With `GITHUB_CREATE_REAL_PR=false`, approve and confirm **Simulated remediation PR** and **No GitHub change was made**.
+5. With real creation deliberately enabled, approve a fresh safe run and confirm **Open in GitHub** appears only after the API returns a URL.
+6. Confirm production, delete, replacement, stale-file, missing-evidence, and active-dependency cases expose no real-PR link.
+
 ## Cloud Hunt Mode
 
 1. Open `http://127.0.0.1:8000/` and select **Cloud Hunt**.

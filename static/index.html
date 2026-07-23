@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GhostBusters Agent Console</title>
-    <link rel="stylesheet" href="/static/styles.css?v=milestone7a" />
+    <link rel="stylesheet" href="/static/styles.css?v=milestone7b" />
   </head>
   <body>
     <header class="topbar">
@@ -59,6 +59,14 @@
             </div>
           </div>
           <p class="deployment-note">In deployment, the same workflow starts automatically when GitHub sends a pull-request webhook. <span id="trigger-source" class="technical-inline">Trigger source not recorded.</span></p>
+          <article class="source-card" id="source-card">
+            <div><span>Source: GitHub Pull Request or fixture</span><strong id="source-kind">Fixture / Demo</strong></div>
+            <div><span>Repository</span><strong id="source-repository">Not recorded</strong></div>
+            <div><span>Pull request</span><strong id="source-pr">Not recorded</strong></div>
+            <div><span>Author</span><strong id="source-author">Not recorded</strong></div>
+            <div><span>Branches</span><strong id="source-branches">Not recorded</strong></div>
+            <div><span>Terraform files</span><strong id="source-files">Prepared fixture</strong></div>
+          </article>
           <p class="message" id="ui-message" role="status"></p>
           <p class="planning-note" id="planning-note"></p>
         </section>
@@ -194,6 +202,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=milestone7a" defer></script>
+    <script src="/static/app.js?v=milestone7b" defer></script>
   </body>
 </html>

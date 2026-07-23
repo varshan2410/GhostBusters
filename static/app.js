@@ -611,6 +611,14 @@ function renderResult() {
   const node = $("result-view");
   clear(node);
   $("result-title").textContent = finalOutcome(state.run);
+  const real = state.run?.real_pr;
+  if (real) {
+    const summary = el("div", "pr-summary");
+    [["Result", "Real remediation pull request"], ["PR", `#${real.number}`], ["Branch", real.branch], ["Base", real.base_branch], ["Repository", real.repository]].forEach(([label, value]) => { const item = el("div"); append(item, el("span", null, label), el("strong", null, value)); summary.appendChild(item); });
+    const link = el("a", "github-link", "Open in GitHub"); link.href = real.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+    append(node, summary, link);
+    return;
+  }
   const pr = state.run?.mock_pr;
   if (!pr) {
     node.appendChild(el("p", "muted", state.run ? "No PR has been created." : "Start an investigation to see the final workflow outcome."));
@@ -623,6 +631,17 @@ function renderResult() {
   });
   const diff = el("pre"); diff.textContent = pr.terraform_patch_preview || "Not recorded";
   append(layout, summary, diff); node.appendChild(layout);
+  node.appendChild(el("p", "muted", "Simulated remediation PR. No GitHub change was made."));
+}
+
+function renderSource() {
+  const source = state.run?.github_source;
+  $("source-kind").textContent = source ? "GitHub Pull Request | Integration: Real" : state.run ? "Fixture / Demo" : "Integration disabled or no run";
+  $("source-repository").textContent = source?.repository || "Not recorded";
+  $("source-pr").textContent = source ? `#${source.pull_request_number} - ${source.pull_request_title || "Title unavailable"}` : "Not recorded";
+  $("source-author").textContent = source?.author || "Not recorded";
+  $("source-branches").textContent = source ? `${source.head_branch} -> ${source.base_branch} | ${source.head_sha}` : "Not recorded";
+  $("source-files").textContent = source?.terraform_files?.length ? source.terraform_files.join(", ") : source ? "No Terraform files selected" : "Prepared fixture";
 }
 
 function renderStatus() {
@@ -631,7 +650,7 @@ function renderStatus() {
   $("policy-pill").textContent = `Policy: ${policyEngineLabel(run?.decision_record?.policy_result?.engine)}`;
   $("approval-pill").textContent = `Human: ${humanDecision(run).label}`;
   $("technical-run-id").textContent = `Run ID: ${run?.id || "not recorded"}`;
-  $("trigger-source").textContent = "Trigger source not recorded";
+  $("trigger-source").textContent = run?.github_source ? "Trigger source: GitHub Pull Request" : run ? "Trigger source: Fixture / Demo" : "Trigger source not recorded";
 }
 
 function renderAudit() {
@@ -764,7 +783,7 @@ function renderImpact() {
 
 function renderRuntime() {
   const node = $("runtime-view"); clear(node);
-  node.appendChild(dataList([["Run ID", state.run?.id], ["Version", state.run?.version], ["Scenario fixture", state.run?.scenario_name], ["Trigger source", "Not recorded in run response"], ["Idempotency key", state.run?.idempotency_key], ["Storage backend", "Not recorded in run response"], ["Webhook dedup backend", "Not recorded in run response"], ["Policy engine", state.run?.decision_record?.policy_result?.engine], ["Retry configuration", "Not recorded in run response"]]));
+  node.appendChild(dataList([["Run ID", state.run?.id], ["Version", state.run?.version], ["Scenario fixture", state.run?.scenario_name], ["Trigger source", state.run?.source_type], ["Repository", state.run?.github_source?.repository], ["Pull request", state.run?.github_source?.pull_request_number], ["Head SHA", state.run?.github_source?.head_sha], ["Idempotency key", state.run?.idempotency_key], ["Policy engine", state.run?.decision_record?.policy_result?.engine], ["Real remediation URL", state.run?.real_pr?.url]]));
 }
 
 function renderTechnical() {
@@ -786,7 +805,7 @@ function renderAIDecisions() {
 }
 
 function renderAll() {
-  renderStatus(); renderPlanningStatus(); renderStages(); renderRecommendation(); renderEvidenceSummary(); renderHumanControls(); renderResult(); renderTechnical();
+  renderStatus(); renderSource(); renderPlanningStatus(); renderStages(); renderRecommendation(); renderEvidenceSummary(); renderHumanControls(); renderResult(); renderTechnical();
   renderCloudHunt(); renderReviewQueue();
 }
 

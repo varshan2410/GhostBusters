@@ -403,6 +403,53 @@ class MockPullRequest(AppModel):
     human_approval_summary: str
 
 
+class GitHubTerraformResourceChange(AppModel):
+    address: str
+    provider: str
+    resource_type: str
+    resource_name: str
+    actions: list[str] = Field(default_factory=list)
+    before: dict[str, Any] | None = None
+    after: dict[str, Any] | None = None
+    changed_attributes: list[str] = Field(default_factory=list)
+    destructive: bool = False
+    replacement: bool = False
+    source_file: str
+
+
+class GitHubTerraformChange(AppModel):
+    repository: str
+    pull_request_number: int
+    pull_request_url: str
+    pull_request_title: str | None = None
+    author: str | None = None
+    base_branch: str
+    base_sha: str
+    head_branch: str
+    head_sha: str
+    changed_files: list[str] = Field(default_factory=list)
+    terraform_files: list[str] = Field(default_factory=list)
+    resource_changes: list[GitHubTerraformResourceChange] = Field(default_factory=list)
+    provider: str | None = None
+    environment: str | None = None
+    parse_mode: Literal["github_diff", "prepared_plan_json", "terraform_show_json"] = "github_diff"
+    warnings: list[str] = Field(default_factory=list)
+    unsupported_changes: list[str] = Field(default_factory=list)
+
+
+class RealPullRequest(AppModel):
+    repository: str
+    number: int
+    url: str
+    branch: str
+    base_branch: str
+    title: str
+    created_at: datetime
+    idempotency_key: str
+    status: str = "open"
+    reused: bool = False
+
+
 class WorkflowRun(AppModel):
     id: UUID
     goal: str
@@ -414,6 +461,9 @@ class WorkflowRun(AppModel):
     human_reviews: list[HumanReviewRecord] = Field(default_factory=list)
     audit_events: list[AuditEvent] = Field(default_factory=list)
     mock_pr: MockPullRequest | None = None
+    source_type: ReviewCaseSource = "manual_demo"
+    github_source: GitHubTerraformChange | None = None
+    real_pr: RealPullRequest | None = None
     version: int = 1
     idempotency_key: str | None = None
     error: str | None = None

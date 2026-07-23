@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -23,6 +24,9 @@ from core.workflow_service import (
     workflow_service,
 )
 from core.cloud_hunt_service import CloudHuntConflictError, CloudHuntNotFoundError, cloud_hunt_service
+from integrations.github_client import GitHubAPIError
+from integrations.github_webhook import repository_allowed, verify_signature
+from integrations.terraform_runner import TerraformAnalysisError, parse_github_terraform_change, select_terraform_files
 
 
 app = FastAPI(title="GhostBusters", version="0.1.0")
@@ -82,7 +86,7 @@ def review_run(run_id: UUID, request: HumanReviewRequest, response: Response) ->
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except WorkflowConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if maybe_pr_created and run.mock_pr is not None:
+    if maybe_pr_created and (run.mock_pr is not None or run.real_pr is not None):
         response.status_code = 201
     return run
 
@@ -176,12 +180,19 @@ async def github_webhook(
     response: Response,
     x_github_event: str | None = Header(default=None, alias="X-GitHub-Event"),
     x_github_delivery: str | None = Header(default=None, alias="X-GitHub-Delivery"),
+    x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
 ) -> dict[str, object]:
     if not x_github_delivery:
         raise HTTPException(status_code=422, detail="X-GitHub-Delivery header is required.")
+    raw_body = await request.body()
+    if settings.github_integration_enabled and not verify_signature(raw_body, x_hub_signature_256, settings.github_webhook_secret):
+        raise HTTPException(status_code=401, detail="Invalid GitHub webhook signature.")
     if x_github_event != "pull_request":
         return {"status": "ignored", "reason": f"Unsupported event: {x_github_event}"}
-    payload = await request.json()
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Malformed webhook JSON.") from exc
     action = payload.get("action")
     if action not in {"opened", "reopened", "synchronize"}:
         return {"status": "ignored", "reason": f"Unsupported pull_request action: {action}"}
@@ -191,6 +202,32 @@ async def github_webhook(
             return {"status": "duplicate", "run": workflow_service.get_run(cached_run_id)}
         except RunNotFoundError:
             pass
+    durable = workflow_service.find_run_by_idempotency(x_github_delivery)
+    if durable is not None:
+        return {"status": "duplicate", "run": durable}
+    if settings.github_integration_enabled:
+        repository = str((payload.get("repository") or {}).get("full_name") or "")
+        if not repository_allowed(repository, settings.github_allowed_repositories):
+            raise HTTPException(status_code=403, detail="Repository is not allowed for GitHub integration.")
+        client = workflow_service.github_client
+        if client is None:
+            raise HTTPException(status_code=503, detail="GitHub integration is enabled but credentials are unavailable.")
+        try:
+            number = int((payload.get("pull_request") or {}).get("number") or payload.get("number"))
+            owner, repo = repository.split("/", 1)
+            pr = client.get_pull_request(owner, repo, number)
+            files = client.list_pull_request_files(owner, repo, number)
+            selected, _ = select_terraform_files(files)
+            head_sha = str((pr.get("head") or {}).get("sha") or "")
+            fetched = {item["filename"]: client.get_file_content(owner, repo, item["filename"], head_sha)["content"] for item in selected}
+            source = parse_github_terraform_change(repository, pr, files, fetched)
+            run, created = workflow_service.start_github_run(source, x_github_delivery)
+        except (GitHubAPIError, TerraformAnalysisError, ValueError, KeyError) as exc:
+            detail = str(exc) if isinstance(exc, TerraformAnalysisError) else "GitHub integration failed safely."
+            raise HTTPException(status_code=422, detail=detail) from exc
+        webhook_deduplicator.remember(x_github_delivery, run.id)
+        response.status_code = 201 if created else 200
+        return {"status": "created" if created else "duplicate", "run": run}
     goal = payload.get("goal") or "Analyze Terraform pull request for safe FinOps remediation."
     scenario_name = payload.get("scenario_name") or "safe"
     try:

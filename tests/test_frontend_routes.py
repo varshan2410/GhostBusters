@@ -17,8 +17,9 @@ def test_root_serves_agent_console() -> None:
     assert "Technical Audit" in response.text
     assert 'id="simple-view"' in response.text
     assert 'id="technical-view" hidden' in response.text
-    assert "/static/app.js?v=milestone7a" in response.text
-    assert "/static/styles.css?v=milestone7a" in response.text
+    assert "/static/app.js?v=milestone7b" in response.text
+    assert "/static/styles.css?v=milestone7b" in response.text
+    assert "GitHub Pull Request" in response.text
     assert "Agent recommendation" in response.text
     assert "Human decision" in response.text
     assert "Final workflow outcome" in response.text

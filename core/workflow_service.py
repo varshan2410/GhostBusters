@@ -22,6 +22,7 @@ from app.models import (
     TerraformResourceChange,
     ToolExecutionRecord,
     WorkflowRun,
+    GitHubTerraformChange,
 )
 from app.settings import Settings, settings
 from core.alternative_generator import generate_alternatives
@@ -48,6 +49,8 @@ from core.verifier import run_verifier
 from integrations.base import utc_now
 from integrations.registry import ToolRegistry, default_registry
 from integrations.terraform_parser import parse_terraform_plan
+from integrations.github_client import GitHubClient
+from integrations.remediation_pr_service import RemediationPRService, RemediationValidationError
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -96,6 +99,7 @@ class WorkflowService:
         retry_executor: RetryExecutor | None = None,
         configuration: Settings = settings,
         ai_client=None,
+        github_client: GitHubClient | None = None,
     ) -> None:
         self.store = store or build_run_store()
         self.tool_registry = tool_registry or default_registry
@@ -103,6 +107,7 @@ class WorkflowService:
         self.retry_executor = retry_executor or default_retry_executor
         self.configuration = configuration
         self.ai_client = ai_client
+        self.github_client = github_client or (GitHubClient(configuration.github_token, configuration.github_api_base_url, configuration.github_request_timeout_seconds) if configuration.github_integration_enabled and configuration.github_token else None)
 
     def start_run(self, request: StartRunRequest) -> tuple[WorkflowRun, bool]:
         if request.idempotency_key:
@@ -174,8 +179,59 @@ class WorkflowService:
         scenario = load_scenario(scenario_name)
         return self.start_run(StartRunRequest(goal=goal or scenario.goal, scenario_name=scenario_name))
 
+    def start_github_run(self, source: GitHubTerraformChange, delivery_id: str, goal: str | None = None) -> tuple[WorkflowRun, bool]:
+        existing = self.store.find_by_idempotency_key(delivery_id)
+        if existing is not None:
+            return existing, False
+        scenario = load_scenario("safe")
+        now = utc_now()
+        run = WorkflowRun(
+            id=uuid4(), goal=goal or "Analyze a GitHub Terraform pull request for safe FinOps remediation.",
+            scenario_name="safe", status=RunStatus.created, created_at=now, updated_at=now,
+            idempotency_key=delivery_id, source_type="terraform_pr", github_source=source,
+        )
+        append_audit_event(run, event_type="github_webhook_received", actor="system", summary="Validated GitHub pull-request webhook received.", details={"repository": source.repository, "pull_request": source.pull_request_number})
+        append_audit_event(run, event_type="github_signature_validated", actor="system", summary="Webhook HMAC SHA-256 signature validated.", details={"repository": source.repository})
+        append_audit_event(run, event_type="github_repository_allowed", actor="system", summary="Repository matched the explicit allowlist.", details={"repository": source.repository})
+        append_audit_event(run, event_type="github_pr_loaded", actor="tool", summary="GitHub pull-request metadata loaded.", details={"repository": source.repository, "pull_request": source.pull_request_number, "head_sha": source.head_sha})
+        append_audit_event(run, event_type="github_pr_files_loaded", actor="tool", summary="Changed files loaded from GitHub.", details={"files": source.changed_files})
+        append_audit_event(run, event_type="terraform_files_selected", actor="agent", summary=f"Selected {len(source.terraform_files)} Terraform file(s).", details={"selected": source.terraform_files, "skipped": source.unsupported_changes})
+        run = self.store.create(run)
+
+        def execute(current: WorkflowRun) -> WorkflowRun:
+            if not source.resource_changes:
+                current.status = RunStatus.keep
+                append_audit_event(current, event_type="terraform_analysis_skipped", actor="agent", summary="No Terraform resource changes required investigation.")
+                return current
+            change = source.resource_changes[0]
+            current_value = next(((change.after or {}).get(key) for key in ("instance_type", "machine_type", "size") if (change.after or {}).get(key)), None)
+            prior_value = next(((change.before or {}).get(key) for key in ("instance_type", "machine_type", "size") if (change.before or {}).get(key)), None)
+            resource = TerraformResourceChange(
+                address=change.address, resource_type=change.resource_type, actions=change.actions,
+                before=change.before, after=change.after, environment=source.environment,
+                current_instance_type=current_value, proposed_instance_type=prior_value,
+                destructive=change.destructive or change.replacement, tags=None,
+            )
+            append_audit_event(current, event_type="terraform_change_parsed", actor="agent", summary="Controlled GitHub diff parsed.", details={"resource": change.address, "provider": change.provider, "destructive": resource.destructive})
+            try:
+                current.status = RunStatus.investigating
+                decision = analyze_resource(current.goal, scenario, resource, self.tool_registry, self.policy_evaluator, current.id, self.retry_executor, configuration=self.configuration, ai_client=self.ai_client)
+                current.decision_record = decision
+                current.status = map_final_status(decision.final_status)
+                self._copy_decision_audit(current, decision)
+                append_audit_event(current, event_type="github_investigation_created", actor="agent", summary="GitHub Terraform investigation completed.", details={"status": current.status})
+            except Exception as exc:
+                current.status, current.error = RunStatus.failed_safely, str(exc)
+                append_audit_event(current, event_type="github_integration_failed", actor="system", summary="GitHub investigation failed safely.")
+            current.updated_at = utc_now()
+            return current
+        return self.store.update(run.id, execute), True
+
     def get_run(self, run_id: UUID) -> WorkflowRun:
         return self.store.get(run_id)
+
+    def find_run_by_idempotency(self, key: str) -> WorkflowRun | None:
+        return self.store.find_by_idempotency_key(key)
 
     def list_runs(self) -> list[WorkflowRun]:
         return self.store.list()
@@ -217,11 +273,26 @@ class WorkflowService:
 
     def _approve(self, run: WorkflowRun, record: HumanReviewRecord) -> None:
         decision = ensure_can_approve(run)
-        scenario = load_scenario(run.scenario_name)
-        resource = parse_terraform_plan(scenario.terraform_plan_file)[0]
+        resource = self._resource_for_run(run)
         run.human_reviews.append(record)
         append_audit_event(run, event_type="human_review_received", actor="human", summary="Approval received.", details=record.model_dump(mode="json"))
         run.status = RunStatus.approved
+        if run.github_source and self.configuration.github_create_real_pr and self.configuration.github_integration_enabled and self.github_client:
+            append_audit_event(run, event_type="remediation_validation_started", actor="agent", summary="Validating real GitHub remediation proposal.")
+            try:
+                run.real_pr = RemediationPRService(self.github_client, self.configuration).create(run, record)
+                run.status = RunStatus.pr_created
+                if run.real_pr.reused:
+                    append_audit_event(run, event_type="github_remediation_pr_reused", actor="agent", summary="Existing open remediation pull request reused.", details={"url": run.real_pr.url, "branch": run.real_pr.branch})
+                else:
+                    append_audit_event(run, event_type="github_branch_created", actor="tool", summary="Dedicated remediation branch created.", details={"branch": run.real_pr.branch})
+                    append_audit_event(run, event_type="github_file_updated", actor="tool", summary="Validated Terraform file committed to remediation branch.", details={"resource": decision.resource_id})
+                    append_audit_event(run, event_type="github_remediation_pr_created", actor="agent", summary="GitHub confirmed remediation pull request creation.", details={"url": run.real_pr.url, "branch": run.real_pr.branch})
+                return
+            except RemediationValidationError as exc:
+                run.status, run.error = RunStatus.failed_safely, str(exc)
+                append_audit_event(run, event_type="remediation_validation_failed", actor="agent", summary=str(exc))
+                return
         run.mock_pr = create_mock_pull_request(
             pr_number=len(self.store.list()) + 100,
             goal=run.goal,
@@ -232,6 +303,15 @@ class WorkflowService:
         run.status = RunStatus.pr_created
         append_audit_event(run, event_type="mock_pr_created", actor="agent", summary="Simulated remediation PR created.", details={"branch": run.mock_pr.branch})
 
+    def _resource_for_run(self, run: WorkflowRun) -> TerraformResourceChange:
+        if run.github_source and run.github_source.resource_changes:
+            change = run.github_source.resource_changes[0]
+            current = next(((change.after or {}).get(key) for key in ("instance_type", "machine_type", "size") if (change.after or {}).get(key)), None)
+            proposed = next(((change.before or {}).get(key) for key in ("instance_type", "machine_type", "size") if (change.before or {}).get(key)), None)
+            return TerraformResourceChange(address=change.address, resource_type=change.resource_type, actions=change.actions, before=change.before, after=change.after, environment=run.github_source.environment, current_instance_type=current, proposed_instance_type=proposed, destructive=change.destructive or change.replacement, tags=None)
+        scenario = load_scenario(run.scenario_name)
+        return parse_terraform_plan(scenario.terraform_plan_file)[0]
+
     def _request_evidence(self, run: WorkflowRun, request: HumanReviewRequest, record: HumanReviewRecord) -> None:
         decision = ensure_can_request_evidence(run)
         if not request.requested_sources:
@@ -240,7 +320,7 @@ class WorkflowService:
         if unknown:
             raise HumanReviewError(f"Unknown evidence source(s): {', '.join(unknown)}")
         scenario = load_scenario(run.scenario_name)
-        resource = parse_terraform_plan(scenario.terraform_plan_file)[0]
+        resource = self._resource_for_run(run)
         run.human_reviews.append(record)
         append_audit_event(run, event_type="additional_evidence_requested", actor="human", summary="Additional evidence requested.", details={"sources": request.requested_sources})
         plan = InvestigationPlan(
@@ -273,8 +353,7 @@ class WorkflowService:
 
     def _add_context(self, run: WorkflowRun, request: HumanReviewRequest, record: HumanReviewRecord) -> None:
         decision = ensure_can_add_context(run, request)
-        scenario = load_scenario(run.scenario_name)
-        resource = parse_terraform_plan(scenario.terraform_plan_file)[0]
+        resource = self._resource_for_run(run)
         run.human_reviews.append(record)
         context = EvidenceItem(
             source="human_review",
@@ -310,8 +389,7 @@ class WorkflowService:
             raise HumanReviewError("Requested alternative is not eligible.")
         if request.modified_action in {"request_evidence", "abstain", "keep"}:
             raise HumanReviewError("Only remediation alternatives can be modified for approval.")
-        scenario = load_scenario(run.scenario_name)
-        resource = parse_terraform_plan(scenario.terraform_plan_file)[0]
+        resource = self._resource_for_run(run)
         revised = decision.model_copy(deep=True)
         revised.preferred_action = str(request.modified_action)
         verifier = run_verifier(resource, revised.evidence, revised.conflicts, alternative)

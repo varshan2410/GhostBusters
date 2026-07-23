@@ -50,6 +50,21 @@ class Settings:
     cloud_hunt_utilization_lookback_days: int = int(os.getenv("CLOUD_HUNT_UTILIZATION_LOOKBACK_DAYS", "14"))
     cloud_hunt_low_cpu_threshold: float = float(os.getenv("CLOUD_HUNT_LOW_CPU_THRESHOLD", "10"))
     cloud_hunt_enabled: bool = os.getenv("CLOUD_HUNT_ENABLED", "true").lower() in {"1", "true", "yes"}
+    github_integration_enabled: bool = os.getenv("GITHUB_INTEGRATION_ENABLED", "false").lower() in {"1", "true", "yes"}
+    github_token: str | None = os.getenv("GITHUB_TOKEN") or None
+    github_webhook_secret: str | None = os.getenv("GITHUB_WEBHOOK_SECRET") or None
+    github_allowed_repositories: tuple[str, ...] = tuple(item.strip().lower() for item in os.getenv("GITHUB_ALLOWED_REPOSITORIES", "").split(",") if item.strip())
+    github_api_base_url: str = os.getenv("GITHUB_API_BASE_URL", "https://api.github.com")
+    github_request_timeout_seconds: float = float(os.getenv("GITHUB_REQUEST_TIMEOUT_SECONDS", "10"))
+    github_demo_repository: str | None = os.getenv("GITHUB_DEMO_REPOSITORY") or None
+    github_remediation_branch_prefix: str = os.getenv("GITHUB_REMEDIATION_BRANCH_PREFIX", "ghostbusters/remediation")
+    github_create_real_pr: bool = os.getenv("GITHUB_CREATE_REAL_PR", "false").lower() in {"1", "true", "yes"}
+    terraform_cli_enabled: bool = os.getenv("TERRAFORM_CLI_ENABLED", "false").lower() in {"1", "true", "yes"}
+    terraform_binary: str = os.getenv("TERRAFORM_BINARY", "terraform")
+    terraform_timeout_seconds: float = float(os.getenv("TERRAFORM_TIMEOUT_SECONDS", "60"))
+    terraform_work_root: Path = Path(os.getenv("TERRAFORM_WORK_ROOT", ".runtime/terraform"))
+    terraform_allow_init: bool = os.getenv("TERRAFORM_ALLOW_INIT", "false").lower() in {"1", "true", "yes"}
+    terraform_allow_network: bool = os.getenv("TERRAFORM_ALLOW_NETWORK", "false").lower() in {"1", "true", "yes"}
 
 
 settings = Settings()
